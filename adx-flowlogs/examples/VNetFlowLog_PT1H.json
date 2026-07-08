@@ -1,0 +1,2116 @@
+{
+    "records": [
+        {
+            "time": "2026-07-07T18:00:10.1417895Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447159844,10.64.200.4,20.10.127.193,58360,443,6,O,B,NX,0,0,0,0",
+                                    "1783447159867,10.64.200.4,20.10.127.193,58360,443,6,O,E,NX,2,224,1,124",
+                                    "1783447159867,10.64.200.4,20.10.127.193,58360,443,6,O,B,NX,0,0,0,0",
+                                    "1783447165457,10.64.200.4,20.10.127.193,58360,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783447189921,10.64.200.4,20.10.127.193,42360,443,6,O,B,NX,0,0,0,0",
+                                    "1783447189942,10.64.200.4,20.10.127.193,42360,443,6,O,E,NX,2,224,1,124",
+                                    "1783447189942,10.64.200.4,20.10.127.193,42360,443,6,O,B,NX,0,0,0,0",
+                                    "1783447195482,10.64.200.4,20.10.127.193,42360,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:01:10.1427347Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447219988,10.64.200.4,20.10.127.192,54218,443,6,O,B,NX,0,0,0,0",
+                                    "1783447219999,10.64.200.4,20.10.127.192,54218,443,6,O,E,NX,2,224,1,124",
+                                    "1783447219999,10.64.200.4,20.10.127.192,54218,443,6,O,B,NX,0,0,0,0",
+                                    "1783447225577,10.64.200.4,20.10.127.192,54218,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783447250053,10.64.200.4,20.10.127.192,36046,443,6,O,B,NX,0,0,0,0",
+                                    "1783447250058,10.64.200.4,20.10.127.192,36046,443,6,O,E,NX,2,224,1,124",
+                                    "1783447250058,10.64.200.4,20.10.127.192,36046,443,6,O,B,NX,0,0,0,0",
+                                    "1783447256365,10.64.200.4,20.10.127.192,36046,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:02:10.1539813Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447280847,10.64.200.4,20.10.127.192,42544,443,6,O,B,NX,0,0,0,0",
+                                    "1783447280858,10.64.200.4,20.10.127.192,42544,443,6,O,E,NX,2,224,1,124",
+                                    "1783447280858,10.64.200.4,20.10.127.192,42544,443,6,O,B,NX,0,0,0,0",
+                                    "1783447286353,10.64.200.4,20.10.127.192,42544,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447286682,10.64.200.4,20.184.175.5,39726,443,6,O,B,NX,0,0,0,0",
+                                    "1783447286752,10.64.200.4,20.184.175.5,39726,443,6,O,E,NX,2,224,1,124",
+                                    "1783447286752,10.64.200.4,20.184.175.5,39726,443,6,O,B,NX,0,0,0,0",
+                                    "1783447292612,10.64.200.4,20.184.175.5,39726,443,6,O,E,NX,14,9891,14,6649",
+                                    "1783447309279,10.64.200.4,13.89.178.27,41162,443,6,O,B,NX,0,0,0,0",
+                                    "1783447309315,10.64.200.4,13.89.178.27,41162,443,6,O,E,NX,2,224,1,124",
+                                    "1783447309315,10.64.200.4,13.89.178.27,41162,443,6,O,B,NX,0,0,0,0",
+                                    "1783447310923,10.64.200.4,20.10.127.192,49100,443,6,O,B,NX,0,0,0,0",
+                                    "1783447310932,10.64.200.4,20.10.127.192,49100,443,6,O,E,NX,2,224,1,124",
+                                    "1783447310932,10.64.200.4,20.10.127.192,49100,443,6,O,B,NX,0,0,0,0",
+                                    "1783447314987,10.64.200.4,13.89.178.27,41162,443,6,O,E,NX,13,7230,14,6649",
+                                    "1783447316529,10.64.200.4,20.10.127.192,49100,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:03:10.1770572Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447340978,10.64.200.4,20.10.127.193,58048,443,6,O,B,NX,0,0,0,0",
+                                    "1783447340989,10.64.200.4,20.10.127.193,58048,443,6,O,E,NX,2,224,1,124",
+                                    "1783447340989,10.64.200.4,20.10.127.193,58048,443,6,O,B,NX,0,0,0,0",
+                                    "1783447346538,10.64.200.4,20.10.127.193,58048,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447371029,10.64.200.4,20.10.127.192,46982,443,6,O,B,NX,0,0,0,0",
+                                    "1783447371040,10.64.200.4,20.10.127.192,46982,443,6,O,E,NX,2,224,1,124",
+                                    "1783447371040,10.64.200.4,20.10.127.192,46982,443,6,O,B,NX,0,0,0,0",
+                                    "1783447376670,10.64.200.4,20.10.127.192,46982,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:04:10.1866336Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447401080,10.64.200.4,20.10.127.193,53552,443,6,O,B,NX,0,0,0,0",
+                                    "1783447401090,10.64.200.4,20.10.127.193,53552,443,6,O,E,NX,2,224,1,124",
+                                    "1783447401090,10.64.200.4,20.10.127.193,53552,443,6,O,B,NX,0,0,0,0",
+                                    "1783447406612,10.64.200.4,20.10.127.193,53552,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783447431134,10.64.200.4,20.10.127.193,35110,443,6,O,B,NX,0,0,0,0",
+                                    "1783447431145,10.64.200.4,20.10.127.193,35110,443,6,O,E,NX,2,224,1,124",
+                                    "1783447431145,10.64.200.4,20.10.127.193,35110,443,6,O,B,NX,0,0,0,0",
+                                    "1783447436754,10.64.200.4,20.10.127.193,35110,443,6,O,E,NX,13,8315,12,7697"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:05:10.1797333Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447461239,10.64.200.4,20.10.127.193,48392,443,6,O,B,NX,0,0,0,0",
+                                    "1783447461250,10.64.200.4,20.10.127.193,48392,443,6,O,E,NX,2,224,1,124",
+                                    "1783447461250,10.64.200.4,20.10.127.193,48392,443,6,O,B,NX,0,0,0,0",
+                                    "1783447466990,10.64.200.4,20.10.127.193,48392,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783447491443,10.64.200.4,20.10.127.192,57864,443,6,O,B,NX,0,0,0,0",
+                                    "1783447491453,10.64.200.4,20.10.127.192,57864,443,6,O,E,NX,2,224,1,124",
+                                    "1783447491457,10.64.200.4,20.10.127.192,57864,443,6,O,B,NX,0,0,0,0",
+                                    "1783447497002,10.64.200.4,20.10.127.192,57864,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447503106,10.64.200.4,20.184.175.7,51118,443,6,O,B,NX,0,0,0,0",
+                                    "1783447503181,10.64.200.4,20.184.175.7,51118,443,6,O,E,NX,2,224,1,124",
+                                    "1783447503181,10.64.200.4,20.184.175.7,51118,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:06:10.1806701Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447509155,10.64.200.4,20.184.175.7,51118,443,6,O,E,NX,14,7243,14,6649",
+                                    "1783447521502,10.64.200.4,20.10.127.193,42926,443,6,O,B,NX,0,0,0,0",
+                                    "1783447521522,10.64.200.4,20.10.127.193,42926,443,6,O,E,NX,2,224,1,124",
+                                    "1783447521522,10.64.200.4,20.10.127.193,42926,443,6,O,B,NX,0,0,0,0",
+                                    "1783447527106,10.64.200.4,20.10.127.193,42926,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783447551573,10.64.200.4,20.10.127.193,55046,443,6,O,B,NX,0,0,0,0",
+                                    "1783447551583,10.64.200.4,20.10.127.193,55046,443,6,O,E,NX,2,224,1,124",
+                                    "1783447551583,10.64.200.4,20.10.127.193,55046,443,6,O,B,NX,0,0,0,0",
+                                    "1783447557147,10.64.200.4,20.10.127.193,55046,443,6,O,E,NX,13,8315,13,7808"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:07:10.2062765Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447581654,10.64.200.4,20.10.127.193,59560,443,6,O,B,NX,0,0,0,0",
+                                    "1783447581667,10.64.200.4,20.10.127.193,59560,443,6,O,E,NX,2,224,1,124",
+                                    "1783447581667,10.64.200.4,20.10.127.193,59560,443,6,O,B,NX,0,0,0,0",
+                                    "1783447587238,10.64.200.4,20.10.127.193,59560,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783447611707,10.64.200.4,20.10.127.192,57966,443,6,O,B,NX,0,0,0,0",
+                                    "1783447611715,10.64.200.4,20.10.127.192,57966,443,6,O,E,NX,2,224,1,124",
+                                    "1783447611715,10.64.200.4,20.10.127.192,57966,443,6,O,B,NX,0,0,0,0",
+                                    "1783447617449,10.64.200.4,20.10.127.192,57966,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:08:10.2262378Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447641919,10.64.200.4,20.10.127.192,46076,443,6,O,B,NX,0,0,0,0",
+                                    "1783447641925,10.64.200.4,20.10.127.192,46076,443,6,O,E,NX,2,224,1,124",
+                                    "1783447641925,10.64.200.4,20.10.127.192,46076,443,6,O,B,NX,0,0,0,0",
+                                    "1783447647467,10.64.200.4,20.10.127.192,46076,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447671967,10.64.200.4,20.10.127.193,42892,443,6,O,B,NX,0,0,0,0",
+                                    "1783447671977,10.64.200.4,20.10.127.193,42892,443,6,O,E,NX,2,224,1,124",
+                                    "1783447671977,10.64.200.4,20.10.127.193,42892,443,6,O,B,NX,0,0,0,0",
+                                    "1783447677478,10.64.200.4,20.10.127.193,42892,443,6,O,E,NX,13,8315,14,7924"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:09:10.2190071Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447702020,10.64.200.4,20.10.127.192,39322,443,6,O,B,NX,0,0,0,0",
+                                    "1783447702040,10.64.200.4,20.10.127.192,39322,443,6,O,E,NX,2,224,1,124",
+                                    "1783447702040,10.64.200.4,20.10.127.192,39322,443,6,O,B,NX,0,0,0,0",
+                                    "1783447707589,10.64.200.4,20.10.127.192,39322,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447732086,10.64.200.4,20.10.127.193,36378,443,6,O,B,NX,0,0,0,0",
+                                    "1783447732094,10.64.200.4,20.10.127.193,36378,443,6,O,E,NX,2,224,1,124",
+                                    "1783447732094,10.64.200.4,20.10.127.193,36378,443,6,O,B,NX,0,0,0,0",
+                                    "1783447737804,10.64.200.4,20.10.127.193,36378,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:10:10.2337094Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447762309,10.64.200.4,20.10.127.193,43338,443,6,O,B,NX,0,0,0,0",
+                                    "1783447762316,10.64.200.4,20.10.127.193,43338,443,6,O,E,NX,2,224,1,124",
+                                    "1783447762316,10.64.200.4,20.10.127.193,43338,443,6,O,B,NX,0,0,0,0",
+                                    "1783447767875,10.64.200.4,20.10.127.193,43338,443,6,O,E,NX,14,8423,11,7576",
+                                    "1783447792361,10.64.200.4,20.10.127.192,35148,443,6,O,B,NX,0,0,0,0",
+                                    "1783447792371,10.64.200.4,20.10.127.192,35148,443,6,O,E,NX,2,224,1,124",
+                                    "1783447792371,10.64.200.4,20.10.127.192,35148,443,6,O,B,NX,0,0,0,0",
+                                    "1783447797921,10.64.200.4,20.10.127.192,35148,443,6,O,E,NX,13,8315,13,7808"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:11:10.2258158Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447822423,10.64.200.4,20.10.127.193,33896,443,6,O,B,NX,0,0,0,0",
+                                    "1783447822432,10.64.200.4,20.10.127.193,33896,443,6,O,E,NX,2,224,1,124",
+                                    "1783447822432,10.64.200.4,20.10.127.193,33896,443,6,O,B,NX,0,0,0,0",
+                                    "1783447828046,10.64.200.4,20.10.127.193,33896,443,6,O,E,NX,13,8315,12,7697",
+                                    "1783447852482,10.64.200.4,20.10.127.193,58434,443,6,O,B,NX,0,0,0,0",
+                                    "1783447852489,10.64.200.4,20.10.127.193,58434,443,6,O,E,NX,2,224,1,124",
+                                    "1783447852489,10.64.200.4,20.10.127.193,58434,443,6,O,B,NX,0,0,0,0",
+                                    "1783447858093,10.64.200.4,20.10.127.193,58434,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:12:10.2320134Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "00000000-0000-0000-0000-000000000000",
+                        "flowGroups": [
+                            {
+                                "rule": "PlatformRule",
+                                "flowTuples": [
+                                    "1783447897902,52.123.251.75,10.64.200.4,443,36570,6,I,B,NX,0,0,0,0",
+                                    "1783447903390,52.123.251.75,10.64.200.4,443,36570,6,I,E,NX,1,124,1,96"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447879456,10.64.200.4,52.168.112.67,40540,443,6,O,B,NX,0,0,0,0",
+                                    "1783447879456,10.64.200.4,52.168.112.67,40540,443,6,O,E,NX,2,224,1,124",
+                                    "1783447879456,10.64.200.4,52.168.112.67,40540,443,6,O,B,NX,0,0,0,0",
+                                    "1783447879617,10.64.200.4,20.10.127.193,34054,443,6,O,B,NX,0,0,0,0",
+                                    "1783447879637,10.64.200.4,20.10.127.193,34054,443,6,O,E,NX,2,224,1,124",
+                                    "1783447879637,10.64.200.4,20.10.127.193,34054,443,6,O,B,NX,0,0,0,0",
+                                    "1783447882531,10.64.200.4,20.10.127.193,34068,443,6,O,B,NX,0,0,0,0",
+                                    "1783447882547,10.64.200.4,20.10.127.193,34068,443,6,O,E,NX,2,224,1,124",
+                                    "1783447882547,10.64.200.4,20.10.127.193,34068,443,6,O,B,NX,0,0,0,0",
+                                    "1783447885102,10.64.200.4,52.168.112.67,40540,443,6,O,E,NX,15,19755,16,6883",
+                                    "1783447885213,10.64.200.4,20.10.127.193,34054,443,6,O,E,NX,14,8956,12,7644",
+                                    "1783447886966,10.64.200.4,52.182.143.211,56218,443,6,O,B,NX,0,0,0,0",
+                                    "1783447887000,10.64.200.4,52.182.143.211,56218,443,6,O,E,NX,2,224,1,124",
+                                    "1783447887000,10.64.200.4,52.182.143.211,56218,443,6,O,B,NX,0,0,0,0",
+                                    "1783447888053,10.64.200.4,20.10.127.193,34068,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447890348,10.64.200.4,52.123.251.75,36570,443,6,O,B,NX,0,0,0,0",
+                                    "1783447890748,10.64.200.4,52.123.251.28,46130,443,6,O,B,NX,0,0,0,0",
+                                    "1783447890754,10.64.200.4,52.123.251.28,46130,443,6,O,E,NX,2,224,1,124",
+                                    "1783447890754,10.64.200.4,52.123.251.28,46130,443,6,O,B,NX,0,0,0,0",
+                                    "1783447890764,10.64.200.4,52.123.251.75,36574,443,6,O,B,NX,0,0,0,0",
+                                    "1783447890764,10.64.200.4,52.123.251.75,36574,443,6,O,E,NX,2,224,1,124",
+                                    "1783447890764,10.64.200.4,52.123.251.75,36574,443,6,O,B,NX,0,0,0,0",
+                                    "1783447892641,10.64.200.4,52.182.143.211,56218,443,6,O,E,NX,14,9891,14,6648",
+                                    "1783447893654,10.64.200.4,20.60.221.225,49930,443,6,O,B,NX,0,0,0,0",
+                                    "1783447893664,10.64.200.4,20.60.221.225,49930,443,6,O,E,NX,2,224,1,124",
+                                    "1783447893664,10.64.200.4,20.60.221.225,49930,443,6,O,B,NX,0,0,0,0",
+                                    "1783447895666,10.64.200.4,52.182.143.211,51000,443,6,O,B,NX,0,0,0,0",
+                                    "1783447895690,10.64.200.4,52.182.143.211,51000,443,6,O,E,NX,2,224,1,124",
+                                    "1783447895690,10.64.200.4,52.182.143.211,51000,443,6,O,B,NX,0,0,0,0",
+                                    "1783447896377,10.64.200.4,52.123.251.75,36570,443,6,O,E,NX,2,212,1,124",
+                                    "1783447899226,10.64.200.4,20.60.221.225,49930,443,6,O,E,NX,10,2459,28,31493",
+                                    "1783447901293,10.64.200.4,52.182.143.211,51000,443,6,O,E,NX,13,7253,14,6648",
+                                    "1783447907777,10.64.200.4,13.83.125.0,36878,443,6,O,B,NX,0,0,0,0",
+                                    "1783447907850,10.64.200.4,13.83.125.0,36878,443,6,O,E,NX,2,224,1,124",
+                                    "1783447907850,10.64.200.4,13.83.125.0,36878,443,6,O,B,NX,0,0,0,0",
+                                    "1783447912590,10.64.200.4,20.15.141.192,56292,443,6,O,B,NX,0,0,0,0",
+                                    "1783447912623,10.64.200.4,20.15.141.192,56292,443,6,O,E,NX,2,224,1,124",
+                                    "1783447912623,10.64.200.4,20.15.141.192,56292,443,6,O,B,NX,0,0,0,0",
+                                    "1783447913938,10.64.200.4,13.83.125.0,36878,443,6,O,E,NX,24,39275,18,8442",
+                                    "1783447918213,10.64.200.4,20.15.141.192,56292,443,6,O,E,NX,14,8423,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:13:10.2450231Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783447942692,10.64.200.4,20.10.127.192,54504,443,6,O,B,NX,0,0,0,0",
+                                    "1783447942722,10.64.200.4,20.10.127.192,54504,443,6,O,E,NX,2,224,1,124",
+                                    "1783447942722,10.64.200.4,20.10.127.192,54504,443,6,O,B,NX,0,0,0,0",
+                                    "1783447948252,10.64.200.4,20.10.127.192,54504,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783447972771,10.64.200.4,20.10.127.192,50766,443,6,O,B,NX,0,0,0,0",
+                                    "1783447972781,10.64.200.4,20.10.127.192,50766,443,6,O,E,NX,2,224,1,124",
+                                    "1783447972781,10.64.200.4,20.10.127.192,50766,443,6,O,B,NX,0,0,0,0",
+                                    "1783447978348,10.64.200.4,20.10.127.192,50766,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:14:10.2510645Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448002817,10.64.200.4,20.10.127.192,60040,443,6,O,B,NX,0,0,0,0",
+                                    "1783448002828,10.64.200.4,20.10.127.192,60040,443,6,O,E,NX,2,224,1,124",
+                                    "1783448002828,10.64.200.4,20.10.127.192,60040,443,6,O,B,NX,0,0,0,0",
+                                    "1783448008443,10.64.200.4,20.10.127.192,60040,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783448032887,10.64.200.4,20.10.127.192,58338,443,6,O,B,NX,0,0,0,0",
+                                    "1783448032887,10.64.200.4,20.10.127.192,58338,443,6,O,E,NX,2,224,1,124",
+                                    "1783448032887,10.64.200.4,20.10.127.192,58338,443,6,O,B,NX,0,0,0,0",
+                                    "1783448038405,10.64.200.4,20.10.127.192,58338,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:15:10.2618710Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448062940,10.64.200.4,20.10.127.192,41346,443,6,O,B,NX,0,0,0,0",
+                                    "1783448062953,10.64.200.4,20.10.127.192,41346,443,6,O,E,NX,2,224,1,124",
+                                    "1783448062953,10.64.200.4,20.10.127.192,41346,443,6,O,B,NX,0,0,0,0",
+                                    "1783448068842,10.64.200.4,20.10.127.192,41346,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783448093391,10.64.200.4,20.10.127.193,44896,443,6,O,B,NX,0,0,0,0",
+                                    "1783448093412,10.64.200.4,20.10.127.193,44896,443,6,O,E,NX,2,224,1,124",
+                                    "1783448093412,10.64.200.4,20.10.127.193,44896,443,6,O,B,NX,0,0,0,0",
+                                    "1783448099157,10.64.200.4,20.10.127.193,44896,443,6,O,E,NX,14,8423,13,7808",
+                                    "1783448103126,10.64.200.4,104.208.16.91,37386,443,6,O,B,NX,0,0,0,0",
+                                    "1783448103162,10.64.200.4,104.208.16.91,37386,443,6,O,E,NX,2,224,1,124",
+                                    "1783448103162,10.64.200.4,104.208.16.91,37386,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:16:10.2535565Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448108872,10.64.200.4,104.208.16.91,37386,443,6,O,E,NX,13,7131,14,6649",
+                                    "1783448123557,10.64.200.4,20.10.127.192,36176,443,6,O,B,NX,0,0,0,0",
+                                    "1783448123561,10.64.200.4,20.10.127.192,36176,443,6,O,E,NX,2,224,1,124",
+                                    "1783448123561,10.64.200.4,20.10.127.192,36176,443,6,O,B,NX,0,0,0,0",
+                                    "1783448129175,10.64.200.4,20.10.127.192,36176,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783448153687,10.64.200.4,20.10.127.193,58268,443,6,O,B,NX,0,0,0,0",
+                                    "1783448153701,10.64.200.4,20.10.127.193,58268,443,6,O,E,NX,2,224,1,124",
+                                    "1783448153701,10.64.200.4,20.10.127.193,58268,443,6,O,B,NX,0,0,0,0",
+                                    "1783448159293,10.64.200.4,20.10.127.193,58268,443,6,O,E,NX,13,8315,14,7924"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:17:10.2704578Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448170380,10.64.200.4,52.123.251.28,46130,443,6,O,E,NX,8,3036,9,7965",
+                                    "1783448170480,10.64.200.4,52.123.251.75,36574,443,6,O,E,NX,11,3863,12,9893",
+                                    "1783448183736,10.64.200.4,20.10.127.193,35320,443,6,O,B,NX,0,0,0,0",
+                                    "1783448183745,10.64.200.4,20.10.127.193,35320,443,6,O,E,NX,2,224,1,124",
+                                    "1783448183745,10.64.200.4,20.10.127.193,35320,443,6,O,B,NX,0,0,0,0",
+                                    "1783448189306,10.64.200.4,20.10.127.193,35320,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783448213784,10.64.200.4,20.10.127.192,52310,443,6,O,B,NX,0,0,0,0",
+                                    "1783448213794,10.64.200.4,20.10.127.192,52310,443,6,O,E,NX,2,224,1,124",
+                                    "1783448213794,10.64.200.4,20.10.127.192,52310,443,6,O,B,NX,0,0,0,0",
+                                    "1783448220167,10.64.200.4,20.10.127.192,52310,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783448223146,10.64.200.4,20.184.175.12,41790,443,6,O,B,NX,0,0,0,0",
+                                    "1783448223217,10.64.200.4,20.184.175.12,41790,443,6,O,E,NX,2,224,1,124",
+                                    "1783448223217,10.64.200.4,20.184.175.12,41790,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:18:10.2882364Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448229167,10.64.200.4,20.184.175.12,41790,443,6,O,E,NX,15,8753,14,6649",
+                                    "1783448242239,10.64.200.4,52.182.143.213,56036,443,6,O,B,NX,0,0,0,0",
+                                    "1783448242269,10.64.200.4,52.182.143.213,56036,443,6,O,E,NX,2,224,1,124",
+                                    "1783448242269,10.64.200.4,52.182.143.213,56036,443,6,O,B,NX,0,0,0,0",
+                                    "1783448244674,10.64.200.4,20.10.127.192,52300,443,6,O,B,NX,0,0,0,0",
+                                    "1783448244688,10.64.200.4,20.10.127.192,52300,443,6,O,E,NX,2,224,1,124",
+                                    "1783448244688,10.64.200.4,20.10.127.192,52300,443,6,O,B,NX,0,0,0,0",
+                                    "1783448246170,10.64.200.4,52.182.143.213,33022,443,6,O,B,NX,0,0,0,0",
+                                    "1783448246209,10.64.200.4,52.182.143.213,33022,443,6,O,E,NX,2,224,1,124",
+                                    "1783448246209,10.64.200.4,52.182.143.213,33022,443,6,O,B,NX,0,0,0,0",
+                                    "1783448247982,10.64.200.4,52.182.143.213,56036,443,6,O,E,NX,13,7215,14,6649",
+                                    "1783448250299,10.64.200.4,20.10.127.192,52300,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783448251921,10.64.200.4,52.182.143.213,33022,443,6,O,E,NX,15,11889,14,6651",
+                                    "1783448274726,10.64.200.4,20.10.127.192,59648,443,6,O,B,NX,0,0,0,0",
+                                    "1783448274734,10.64.200.4,20.10.127.192,59648,443,6,O,E,NX,2,224,1,124",
+                                    "1783448274734,10.64.200.4,20.10.127.192,59648,443,6,O,B,NX,0,0,0,0",
+                                    "1783448280286,10.64.200.4,20.10.127.192,59648,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:19:10.3008111Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448304772,10.64.200.4,20.15.141.193,41904,443,6,O,B,NX,0,0,0,0",
+                                    "1783448304804,10.64.200.4,20.15.141.193,41904,443,6,O,E,NX,2,224,1,124",
+                                    "1783448304804,10.64.200.4,20.15.141.193,41904,443,6,O,B,NX,0,0,0,0",
+                                    "1783448310507,10.64.200.4,20.15.141.193,41904,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783448334917,10.64.200.4,20.10.127.192,55648,443,6,O,B,NX,0,0,0,0",
+                                    "1783448334922,10.64.200.4,20.10.127.192,55648,443,6,O,E,NX,2,224,1,124",
+                                    "1783448334922,10.64.200.4,20.10.127.192,55648,443,6,O,B,NX,0,0,0,0",
+                                    "1783448340510,10.64.200.4,20.10.127.192,55648,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:20:10.2913135Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448364960,10.64.200.4,20.10.127.193,39842,443,6,O,B,NX,0,0,0,0",
+                                    "1783448364970,10.64.200.4,20.10.127.193,39842,443,6,O,E,NX,2,224,1,124",
+                                    "1783448364970,10.64.200.4,20.10.127.193,39842,443,6,O,B,NX,0,0,0,0",
+                                    "1783448370514,10.64.200.4,20.10.127.193,39842,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783448395009,10.64.200.4,20.10.127.193,41324,443,6,O,B,NX,0,0,0,0",
+                                    "1783448395014,10.64.200.4,20.10.127.193,41324,443,6,O,E,NX,2,224,1,124",
+                                    "1783448395014,10.64.200.4,20.10.127.193,41324,443,6,O,B,NX,0,0,0,0",
+                                    "1783448400627,10.64.200.4,20.10.127.193,41324,443,6,O,E,NX,14,8423,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:21:10.2944668Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448425064,10.64.200.4,20.10.127.192,35308,443,6,O,B,NX,0,0,0,0",
+                                    "1783448425076,10.64.200.4,20.10.127.192,35308,443,6,O,E,NX,2,224,1,124",
+                                    "1783448425076,10.64.200.4,20.10.127.192,35308,443,6,O,B,NX,0,0,0,0",
+                                    "1783448430653,10.64.200.4,20.10.127.192,35308,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783448455113,10.64.200.4,20.10.127.193,39340,443,6,O,B,NX,0,0,0,0",
+                                    "1783448455122,10.64.200.4,20.10.127.193,39340,443,6,O,E,NX,2,224,1,124",
+                                    "1783448455122,10.64.200.4,20.10.127.193,39340,443,6,O,B,NX,0,0,0,0",
+                                    "1783448460736,10.64.200.4,20.10.127.193,39340,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:22:10.2985580Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448485167,10.64.200.4,20.10.127.192,48504,443,6,O,B,NX,0,0,0,0",
+                                    "1783448485177,10.64.200.4,20.10.127.192,48504,443,6,O,E,NX,2,224,1,124",
+                                    "1783448485177,10.64.200.4,20.10.127.192,48504,443,6,O,B,NX,0,0,0,0",
+                                    "1783448487390,10.64.200.4,20.184.175.1,52668,443,6,O,B,NX,0,0,0,0",
+                                    "1783448487453,10.64.200.4,20.184.175.1,52668,443,6,O,E,NX,2,224,1,124",
+                                    "1783448487453,10.64.200.4,20.184.175.1,52668,443,6,O,B,NX,0,0,0,0",
+                                    "1783448490714,10.64.200.4,20.10.127.192,48504,443,6,O,E,NX,13,8315,11,7581",
+                                    "1783448493211,10.64.200.4,20.184.175.1,52668,443,6,O,E,NX,14,9887,14,6649",
+                                    "1783448509673,10.64.200.4,13.89.179.11,36604,443,6,O,B,NX,0,0,0,0",
+                                    "1783448509766,10.64.200.4,13.89.179.11,36604,443,6,O,E,NX,2,224,1,124",
+                                    "1783448509766,10.64.200.4,13.89.179.11,36604,443,6,O,B,NX,0,0,0,0",
+                                    "1783448510062,10.64.200.4,13.89.179.11,36606,443,6,O,B,NX,0,0,0,0",
+                                    "1783448510114,10.64.200.4,13.89.179.11,36606,443,6,O,E,NX,2,224,1,124",
+                                    "1783448510114,10.64.200.4,13.89.179.11,36606,443,6,O,B,NX,0,0,0,0",
+                                    "1783448515216,10.64.200.4,20.10.127.193,47138,443,6,O,B,NX,0,0,0,0",
+                                    "1783448515226,10.64.200.4,20.10.127.193,47138,443,6,O,E,NX,2,224,1,124",
+                                    "1783448515226,10.64.200.4,20.10.127.193,47138,443,6,O,B,NX,0,0,0,0",
+                                    "1783448515579,10.64.200.4,13.89.179.11,36604,443,6,O,E,NX,15,8798,14,6649",
+                                    "1783448515800,10.64.200.4,13.89.179.11,36606,443,6,O,E,NX,13,7095,14,6649",
+                                    "1783448522459,10.64.200.4,20.10.127.193,47138,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:23:10.3176177Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448546917,10.64.200.4,20.10.127.192,57500,443,6,O,B,NX,0,0,0,0",
+                                    "1783448546933,10.64.200.4,20.10.127.192,57500,443,6,O,E,NX,2,224,1,124",
+                                    "1783448546933,10.64.200.4,20.10.127.192,57500,443,6,O,B,NX,0,0,0,0",
+                                    "1783448552505,10.64.200.4,20.10.127.192,57500,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783448576972,10.64.200.4,20.10.127.192,60350,443,6,O,B,NX,0,0,0,0",
+                                    "1783448576983,10.64.200.4,20.10.127.192,60350,443,6,O,E,NX,2,224,1,124",
+                                    "1783448576983,10.64.200.4,20.10.127.192,60350,443,6,O,B,NX,0,0,0,0",
+                                    "1783448582603,10.64.200.4,20.10.127.192,60350,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:24:10.3382524Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448607030,10.64.200.4,20.10.127.192,33384,443,6,O,B,NX,0,0,0,0",
+                                    "1783448607048,10.64.200.4,20.10.127.192,33384,443,6,O,E,NX,2,224,1,124",
+                                    "1783448607048,10.64.200.4,20.10.127.192,33384,443,6,O,B,NX,0,0,0,0",
+                                    "1783448612548,10.64.200.4,20.10.127.192,33384,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783448637112,10.64.200.4,20.10.127.193,39194,443,6,O,B,NX,0,0,0,0",
+                                    "1783448637121,10.64.200.4,20.10.127.193,39194,443,6,O,E,NX,2,224,1,124",
+                                    "1783448637121,10.64.200.4,20.10.127.193,39194,443,6,O,B,NX,0,0,0,0",
+                                    "1783448642664,10.64.200.4,20.10.127.193,39194,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:25:10.3623056Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448667157,10.64.200.4,20.15.141.192,57210,443,6,O,B,NX,0,0,0,0",
+                                    "1783448667188,10.64.200.4,20.15.141.192,57210,443,6,O,E,NX,2,224,1,124",
+                                    "1783448667188,10.64.200.4,20.15.141.192,57210,443,6,O,B,NX,0,0,0,0",
+                                    "1783448672885,10.64.200.4,20.15.141.192,57210,443,6,O,E,NX,13,8315,11,7581",
+                                    "1783448697282,10.64.200.4,20.15.141.192,55616,443,6,O,B,NX,0,0,0,0",
+                                    "1783448697317,10.64.200.4,20.15.141.192,55616,443,6,O,E,NX,2,224,1,124",
+                                    "1783448697317,10.64.200.4,20.15.141.192,55616,443,6,O,B,NX,0,0,0,0",
+                                    "1783448702916,10.64.200.4,20.15.141.192,55616,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783448703155,10.64.200.4,20.42.65.88,50568,443,6,O,B,NX,0,0,0,0",
+                                    "1783448703160,10.64.200.4,20.42.65.88,50568,443,6,O,E,NX,2,224,1,124",
+                                    "1783448703160,10.64.200.4,20.42.65.88,50568,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:26:10.3606017Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448708722,10.64.200.4,20.42.65.88,50568,443,6,O,E,NX,13,8467,14,6648",
+                                    "1783448727401,10.64.200.4,20.15.141.192,60502,443,6,O,B,NX,0,0,0,0",
+                                    "1783448727446,10.64.200.4,20.15.141.192,60502,443,6,O,E,NX,2,224,1,124",
+                                    "1783448727446,10.64.200.4,20.15.141.192,60502,443,6,O,B,NX,0,0,0,0",
+                                    "1783448733076,10.64.200.4,20.15.141.192,60502,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783448757518,10.64.200.4,20.15.141.192,55840,443,6,O,B,NX,0,0,0,0",
+                                    "1783448757545,10.64.200.4,20.15.141.192,55840,443,6,O,E,NX,2,224,1,124",
+                                    "1783448757545,10.64.200.4,20.15.141.192,55840,443,6,O,B,NX,0,0,0,0",
+                                    "1783448763183,10.64.200.4,20.15.141.192,55840,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:27:10.3601658Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448787623,10.64.200.4,20.15.141.192,59954,443,6,O,B,NX,0,0,0,0",
+                                    "1783448787651,10.64.200.4,20.15.141.192,59954,443,6,O,E,NX,2,224,1,124",
+                                    "1783448787651,10.64.200.4,20.15.141.192,59954,443,6,O,B,NX,0,0,0,0",
+                                    "1783448793204,10.64.200.4,20.15.141.192,59954,443,6,O,E,NX,13,8315,13,7808",
+                                    "1783448817731,10.64.200.4,20.10.127.192,50938,443,6,O,B,NX,0,0,0,0",
+                                    "1783448817742,10.64.200.4,20.10.127.192,50938,443,6,O,E,NX,2,224,1,124",
+                                    "1783448817742,10.64.200.4,20.10.127.192,50938,443,6,O,B,NX,0,0,0,0",
+                                    "1783448823314,10.64.200.4,20.10.127.192,50938,443,6,O,E,NX,13,8315,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:28:10.3828625Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448847804,10.64.200.4,20.10.127.192,55938,443,6,O,B,NX,0,0,0,0",
+                                    "1783448847814,10.64.200.4,20.10.127.192,55938,443,6,O,E,NX,2,224,1,124",
+                                    "1783448847814,10.64.200.4,20.10.127.192,55938,443,6,O,B,NX,0,0,0,0",
+                                    "1783448853337,10.64.200.4,20.10.127.192,55938,443,6,O,E,NX,13,8315,12,7697",
+                                    "1783448877866,10.64.200.4,20.10.127.192,60208,443,6,O,B,NX,0,0,0,0",
+                                    "1783448877879,10.64.200.4,20.10.127.192,60208,443,6,O,E,NX,2,224,1,124",
+                                    "1783448877879,10.64.200.4,20.10.127.192,60208,443,6,O,B,NX,0,0,0,0",
+                                    "1783448883971,10.64.200.4,20.10.127.192,60208,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:29:10.3961914Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448908436,10.64.200.4,20.10.127.193,54712,443,6,O,B,NX,0,0,0,0",
+                                    "1783448908450,10.64.200.4,20.10.127.193,54712,443,6,O,E,NX,2,224,1,124",
+                                    "1783448908450,10.64.200.4,20.10.127.193,54712,443,6,O,B,NX,0,0,0,0",
+                                    "1783448914142,10.64.200.4,20.10.127.193,54712,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783448938595,10.64.200.4,20.10.127.193,35298,443,6,O,B,NX,0,0,0,0",
+                                    "1783448938610,10.64.200.4,20.10.127.193,35298,443,6,O,E,NX,2,224,1,124",
+                                    "1783448938610,10.64.200.4,20.10.127.193,35298,443,6,O,B,NX,0,0,0,0",
+                                    "1783448944164,10.64.200.4,20.10.127.193,35298,443,6,O,E,NX,13,8315,13,7813"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:30:10.3941556Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783448968652,10.64.200.4,20.10.127.192,33260,443,6,O,B,NX,0,0,0,0",
+                                    "1783448968661,10.64.200.4,20.10.127.192,33260,443,6,O,E,NX,2,224,1,124",
+                                    "1783448968661,10.64.200.4,20.10.127.192,33260,443,6,O,B,NX,0,0,0,0",
+                                    "1783448974218,10.64.200.4,20.10.127.192,33260,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783448998722,10.64.200.4,20.10.127.193,43296,443,6,O,B,NX,0,0,0,0",
+                                    "1783448998732,10.64.200.4,20.10.127.193,43296,443,6,O,E,NX,2,224,1,124",
+                                    "1783448998732,10.64.200.4,20.10.127.193,43296,443,6,O,B,NX,0,0,0,0",
+                                    "1783449004422,10.64.200.4,20.10.127.193,43296,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:31:10.3942844Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449028884,10.64.200.4,20.10.127.193,55908,443,6,O,B,NX,0,0,0,0",
+                                    "1783449028903,10.64.200.4,20.10.127.193,55908,443,6,O,E,NX,2,224,1,124",
+                                    "1783449028903,10.64.200.4,20.10.127.193,55908,443,6,O,B,NX,0,0,0,0",
+                                    "1783449035007,10.64.200.4,20.10.127.193,55908,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449059486,10.64.200.4,20.10.127.193,35880,443,6,O,B,NX,0,0,0,0",
+                                    "1783449059495,10.64.200.4,20.10.127.193,35880,443,6,O,E,NX,2,224,1,124",
+                                    "1783449059495,10.64.200.4,20.10.127.193,35880,443,6,O,B,NX,0,0,0,0",
+                                    "1783449065097,10.64.200.4,20.10.127.193,35880,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:32:10.4022889Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449079459,10.64.200.4,13.89.178.27,35746,443,6,O,B,NX,0,0,0,0",
+                                    "1783449079502,10.64.200.4,13.89.178.27,35746,443,6,O,E,NX,2,224,1,124",
+                                    "1783449079502,10.64.200.4,13.89.178.27,35746,443,6,O,B,NX,0,0,0,0",
+                                    "1783449085169,10.64.200.4,13.89.178.27,35746,443,6,O,E,NX,13,7045,14,6649",
+                                    "1783449087790,10.64.200.4,52.182.143.211,53730,443,6,O,B,NX,0,0,0,0",
+                                    "1783449087815,10.64.200.4,52.182.143.211,53730,443,6,O,E,NX,2,224,1,124",
+                                    "1783449087815,10.64.200.4,52.182.143.211,53730,443,6,O,B,NX,0,0,0,0",
+                                    "1783449089573,10.64.200.4,20.10.127.193,36610,443,6,O,B,NX,0,0,0,0",
+                                    "1783449089573,10.64.200.4,20.10.127.193,36610,443,6,O,E,NX,2,224,1,124",
+                                    "1783449089573,10.64.200.4,20.10.127.193,36610,443,6,O,B,NX,0,0,0,0",
+                                    "1783449093469,10.64.200.4,52.182.143.211,53730,443,6,O,E,NX,14,9890,15,6764",
+                                    "1783449095125,10.64.200.4,20.10.127.193,36610,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783449119624,10.64.200.4,20.10.127.193,50866,443,6,O,B,NX,0,0,0,0",
+                                    "1783449119640,10.64.200.4,20.10.127.193,50866,443,6,O,E,NX,2,224,1,124",
+                                    "1783449119640,10.64.200.4,20.10.127.193,50866,443,6,O,B,NX,0,0,0,0",
+                                    "1783449125184,10.64.200.4,20.10.127.193,50866,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:33:10.3993086Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449149677,10.64.200.4,20.10.127.193,37084,443,6,O,B,NX,0,0,0,0",
+                                    "1783449149687,10.64.200.4,20.10.127.193,37084,443,6,O,E,NX,2,224,1,124",
+                                    "1783449149687,10.64.200.4,20.10.127.193,37084,443,6,O,B,NX,0,0,0,0",
+                                    "1783449156157,10.64.200.4,20.10.127.193,37084,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449180627,10.64.200.4,20.10.127.193,47054,443,6,O,B,NX,0,0,0,0",
+                                    "1783449180631,10.64.200.4,20.10.127.193,47054,443,6,O,E,NX,2,224,1,124",
+                                    "1783449180631,10.64.200.4,20.10.127.193,47054,443,6,O,B,NX,0,0,0,0",
+                                    "1783449186208,10.64.200.4,20.10.127.193,47054,443,6,O,E,NX,14,8423,14,7924"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:34:10.4095296Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449210673,10.64.200.4,20.10.127.193,40314,443,6,O,B,NX,0,0,0,0",
+                                    "1783449210683,10.64.200.4,20.10.127.193,40314,443,6,O,E,NX,2,224,1,124",
+                                    "1783449210683,10.64.200.4,20.10.127.193,40314,443,6,O,B,NX,0,0,0,0",
+                                    "1783449218614,10.64.200.4,20.10.127.193,40314,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783449243120,10.64.200.4,20.10.127.193,46524,443,6,O,B,NX,0,0,0,0",
+                                    "1783449243130,10.64.200.4,20.10.127.193,46524,443,6,O,E,NX,2,224,1,124",
+                                    "1783449243130,10.64.200.4,20.10.127.193,46524,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:35:10.4269579Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449250901,10.64.200.4,20.10.127.193,46524,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449275337,10.64.200.4,20.10.127.193,46030,443,6,O,B,NX,0,0,0,0",
+                                    "1783449275353,10.64.200.4,20.10.127.193,46030,443,6,O,E,NX,2,224,1,124",
+                                    "1783449275353,10.64.200.4,20.10.127.193,46030,443,6,O,B,NX,0,0,0,0",
+                                    "1783449282801,10.64.200.4,20.10.127.193,46030,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449303170,10.64.200.4,20.184.175.20,50298,443,6,O,B,NX,0,0,0,0",
+                                    "1783449303234,10.64.200.4,20.184.175.20,50298,443,6,O,E,NX,2,224,1,124",
+                                    "1783449303234,10.64.200.4,20.184.175.20,50298,443,6,O,B,NX,0,0,0,0",
+                                    "1783449307389,10.64.200.4,20.10.127.193,50922,443,6,O,B,NX,0,0,0,0",
+                                    "1783449307396,10.64.200.4,20.10.127.193,50922,443,6,O,E,NX,2,224,1,124",
+                                    "1783449307396,10.64.200.4,20.10.127.193,50922,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:36:10.4313110Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449309120,10.64.200.4,20.184.175.20,50298,443,6,O,E,NX,13,7133,14,6649",
+                                    "1783449312917,10.64.200.4,20.10.127.193,50922,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449337444,10.64.200.4,20.10.127.193,52324,443,6,O,B,NX,0,0,0,0",
+                                    "1783449337450,10.64.200.4,20.10.127.193,52324,443,6,O,E,NX,2,224,1,124",
+                                    "1783449337450,10.64.200.4,20.10.127.193,52324,443,6,O,B,NX,0,0,0,0",
+                                    "1783449343103,10.64.200.4,20.10.127.193,52324,443,6,O,E,NX,13,8315,14,7924"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:37:10.4239704Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449367548,10.64.200.4,20.10.127.193,49984,443,6,O,B,NX,0,0,0,0",
+                                    "1783449367553,10.64.200.4,20.10.127.193,49984,443,6,O,E,NX,2,224,1,124",
+                                    "1783449367553,10.64.200.4,20.10.127.193,49984,443,6,O,B,NX,0,0,0,0",
+                                    "1783449373130,10.64.200.4,20.10.127.193,49984,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449397592,10.64.200.4,20.10.127.193,35012,443,6,O,B,NX,0,0,0,0",
+                                    "1783449397611,10.64.200.4,20.10.127.193,35012,443,6,O,E,NX,3,1921,5,4684",
+                                    "1783449397611,10.64.200.4,20.10.127.193,35012,443,6,O,B,NX,0,0,0,0",
+                                    "1783449403184,10.64.200.4,20.10.127.193,35012,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:38:10.4298548Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449427638,10.64.200.4,20.10.127.193,47646,443,6,O,B,NX,0,0,0,0",
+                                    "1783449427646,10.64.200.4,20.10.127.193,47646,443,6,O,E,NX,2,224,1,124",
+                                    "1783449427646,10.64.200.4,20.10.127.193,47646,443,6,O,B,NX,0,0,0,0",
+                                    "1783449433170,10.64.200.4,20.10.127.193,47646,443,6,O,E,NX,12,8207,10,7460",
+                                    "1783449457681,10.64.200.4,20.10.127.192,55332,443,6,O,B,NX,0,0,0,0",
+                                    "1783449457691,10.64.200.4,20.10.127.192,55332,443,6,O,E,NX,2,224,1,124",
+                                    "1783449457691,10.64.200.4,20.10.127.192,55332,443,6,O,B,NX,0,0,0,0",
+                                    "1783449463214,10.64.200.4,20.10.127.192,55332,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783449481133,10.64.200.4,52.168.112.66,42546,443,6,O,B,NX,0,0,0,0",
+                                    "1783449481138,10.64.200.4,52.168.112.66,42546,443,6,O,E,NX,2,224,1,124",
+                                    "1783449481138,10.64.200.4,52.168.112.66,42546,443,6,O,B,NX,0,0,0,0",
+                                    "1783449486760,10.64.200.4,52.168.112.66,42546,443,6,O,E,NX,13,7761,14,6648"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:39:10.4277264Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449487735,10.64.200.4,20.10.127.192,35872,443,6,O,B,NX,0,0,0,0",
+                                    "1783449487749,10.64.200.4,20.10.127.192,35872,443,6,O,E,NX,2,224,1,124",
+                                    "1783449487749,10.64.200.4,20.10.127.192,35872,443,6,O,B,NX,0,0,0,0",
+                                    "1783449493341,10.64.200.4,20.10.127.192,35872,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449517793,10.64.200.4,20.10.127.193,41324,443,6,O,B,NX,0,0,0,0",
+                                    "1783449517809,10.64.200.4,20.10.127.193,41324,443,6,O,E,NX,2,224,1,124",
+                                    "1783449517809,10.64.200.4,20.10.127.193,41324,443,6,O,B,NX,0,0,0,0",
+                                    "1783449523435,10.64.200.4,20.10.127.193,41324,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:40:10.4250454Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449547853,10.64.200.4,20.10.127.193,38380,443,6,O,B,NX,0,0,0,0",
+                                    "1783449547863,10.64.200.4,20.10.127.193,38380,443,6,O,E,NX,2,224,1,124",
+                                    "1783449547863,10.64.200.4,20.10.127.193,38380,443,6,O,B,NX,0,0,0,0",
+                                    "1783449553380,10.64.200.4,20.10.127.193,38380,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783449577901,10.64.200.4,20.10.127.192,45556,443,6,O,B,NX,0,0,0,0",
+                                    "1783449577911,10.64.200.4,20.10.127.192,45556,443,6,O,E,NX,2,224,1,124",
+                                    "1783449577911,10.64.200.4,20.10.127.192,45556,443,6,O,B,NX,0,0,0,0",
+                                    "1783449583435,10.64.200.4,20.10.127.192,45556,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449602960,10.64.200.4,104.208.16.90,46718,443,6,O,B,NX,0,0,0,0",
+                                    "1783449602990,10.64.200.4,104.208.16.90,46718,443,6,O,E,NX,2,224,1,124",
+                                    "1783449602990,10.64.200.4,104.208.16.90,46718,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:41:10.4428779Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449607968,10.64.200.4,20.10.127.193,44016,443,6,O,B,NX,0,0,0,0",
+                                    "1783449607979,10.64.200.4,20.10.127.193,44016,443,6,O,E,NX,2,224,1,124",
+                                    "1783449607979,10.64.200.4,20.10.127.193,44016,443,6,O,B,NX,0,0,0,0",
+                                    "1783449608680,10.64.200.4,104.208.16.90,46718,443,6,O,E,NX,14,8893,14,6648",
+                                    "1783449613495,10.64.200.4,20.10.127.193,44016,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449638026,10.64.200.4,20.10.127.192,42100,443,6,O,B,NX,0,0,0,0",
+                                    "1783449638037,10.64.200.4,20.10.127.192,42100,443,6,O,E,NX,2,224,1,124",
+                                    "1783449638037,10.64.200.4,20.10.127.192,42100,443,6,O,B,NX,0,0,0,0",
+                                    "1783449643615,10.64.200.4,20.10.127.192,42100,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:42:10.4528436Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "00000000-0000-0000-0000-000000000000",
+                        "flowGroups": [
+                            {
+                                "rule": "PlatformRule",
+                                "flowTuples": [
+                                    "1783449690346,10.64.200.4,52.123.251.28,46130,443,6,O,B,NX,0,0,0,0",
+                                    "1783449690346,10.64.200.4,52.123.251.75,36574,443,6,O,B,NX,0,0,0,0",
+                                    "1783449695877,10.64.200.4,52.123.251.28,46130,443,6,O,E,NX,1,108,0,0"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449668078,10.64.200.4,20.10.127.193,48730,443,6,O,B,NX,0,0,0,0",
+                                    "1783449668096,10.64.200.4,20.10.127.193,48730,443,6,O,E,NX,2,224,1,124",
+                                    "1783449668096,10.64.200.4,20.10.127.193,48730,443,6,O,B,NX,0,0,0,0",
+                                    "1783449673659,10.64.200.4,20.10.127.193,48730,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449679676,10.64.200.4,20.10.127.193,60664,443,6,O,B,NX,0,0,0,0",
+                                    "1783449679686,10.64.200.4,20.10.127.193,60664,443,6,O,E,NX,2,224,1,124",
+                                    "1783449679686,10.64.200.4,20.10.127.193,60664,443,6,O,B,NX,0,0,0,0",
+                                    "1783449680806,10.64.200.4,20.44.10.122,39378,443,6,O,B,NX,0,0,0,0",
+                                    "1783449680837,10.64.200.4,20.44.10.122,39378,443,6,O,E,NX,2,224,1,124",
+                                    "1783449680837,10.64.200.4,20.44.10.122,39378,443,6,O,B,NX,0,0,0,0",
+                                    "1783449685256,10.64.200.4,20.10.127.193,60664,443,6,O,E,NX,14,8956,11,7528",
+                                    "1783449686546,10.64.200.4,20.44.10.122,39378,443,6,O,E,NX,18,20397,17,6999",
+                                    "1783449688177,10.64.200.4,20.184.175.2,48140,443,6,O,B,NX,0,0,0,0",
+                                    "1783449688249,10.64.200.4,20.184.175.2,48140,443,6,O,E,NX,2,224,1,124",
+                                    "1783449688249,10.64.200.4,20.184.175.2,48140,443,6,O,B,NX,0,0,0,0",
+                                    "1783449690352,10.64.200.4,52.123.251.24,32942,443,6,O,B,NX,0,0,0,0",
+                                    "1783449690356,10.64.200.4,52.123.251.24,32942,443,6,O,E,NX,2,224,1,124",
+                                    "1783449690356,10.64.200.4,52.123.251.24,32942,443,6,O,B,NX,0,0,0,0",
+                                    "1783449690356,10.64.200.4,52.123.251.24,32948,443,6,O,B,NX,0,0,0,0",
+                                    "1783449690367,10.64.200.4,52.123.251.24,32948,443,6,O,E,NX,2,224,1,124",
+                                    "1783449690367,10.64.200.4,52.123.251.24,32948,443,6,O,B,NX,0,0,0,0",
+                                    "1783449694328,10.64.200.4,20.184.175.2,48140,443,6,O,E,NX,15,10000,14,6649",
+                                    "1783449698145,10.64.200.4,20.10.127.192,44660,443,6,O,B,NX,0,0,0,0",
+                                    "1783449698155,10.64.200.4,20.10.127.192,44660,443,6,O,E,NX,2,224,1,124",
+                                    "1783449698155,10.64.200.4,20.10.127.192,44660,443,6,O,B,NX,0,0,0,0",
+                                    "1783449703708,10.64.200.4,20.10.127.192,44660,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449711986,10.64.200.4,20.184.175.17,36664,443,6,O,B,NX,0,0,0,0",
+                                    "1783449712054,10.64.200.4,20.184.175.17,36664,443,6,O,E,NX,2,224,1,124",
+                                    "1783449712054,10.64.200.4,20.184.175.17,36664,443,6,O,B,NX,0,0,0,0",
+                                    "1783449718520,10.64.200.4,20.184.175.17,36664,443,6,O,E,NX,14,7337,14,6649"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:43:10.4545692Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449728204,10.64.200.4,20.10.127.192,56388,443,6,O,B,NX,0,0,0,0",
+                                    "1783449728217,10.64.200.4,20.10.127.192,56388,443,6,O,E,NX,2,224,1,124",
+                                    "1783449728217,10.64.200.4,20.10.127.192,56388,443,6,O,B,NX,0,0,0,0",
+                                    "1783449733818,10.64.200.4,20.10.127.192,56388,443,6,O,E,NX,13,8315,14,7924",
+                                    "1783449758347,10.64.200.4,20.10.127.193,48188,443,6,O,B,NX,0,0,0,0",
+                                    "1783449758358,10.64.200.4,20.10.127.193,48188,443,6,O,E,NX,2,224,1,124",
+                                    "1783449758358,10.64.200.4,20.10.127.193,48188,443,6,O,B,NX,0,0,0,0",
+                                    "1783449763897,10.64.200.4,20.10.127.193,48188,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:44:10.4612066Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449788398,10.64.200.4,20.10.127.192,60798,443,6,O,B,NX,0,0,0,0",
+                                    "1783449788408,10.64.200.4,20.10.127.192,60798,443,6,O,E,NX,2,224,1,124",
+                                    "1783449788408,10.64.200.4,20.10.127.192,60798,443,6,O,B,NX,0,0,0,0",
+                                    "1783449799403,10.64.200.4,20.10.127.192,60798,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783449823842,10.64.200.4,20.10.127.193,42184,443,6,O,B,NX,0,0,0,0",
+                                    "1783449823845,10.64.200.4,20.10.127.193,42184,443,6,O,E,NX,2,224,1,124",
+                                    "1783449823845,10.64.200.4,20.10.127.193,42184,443,6,O,B,NX,0,0,0,0",
+                                    "1783449829375,10.64.200.4,20.10.127.193,42184,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:45:10.4603792Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449853909,10.64.200.4,20.10.127.192,54102,443,6,O,B,NX,0,0,0,0",
+                                    "1783449853916,10.64.200.4,20.10.127.192,54102,443,6,O,E,NX,2,224,1,124",
+                                    "1783449853916,10.64.200.4,20.10.127.192,54102,443,6,O,B,NX,0,0,0,0",
+                                    "1783449859481,10.64.200.4,20.10.127.192,54102,443,6,O,E,NX,12,8207,12,7692",
+                                    "1783449883960,10.64.200.4,20.10.127.193,39924,443,6,O,B,NX,0,0,0,0",
+                                    "1783449883974,10.64.200.4,20.10.127.193,39924,443,6,O,E,NX,2,224,1,124",
+                                    "1783449883974,10.64.200.4,20.10.127.193,39924,443,6,O,B,NX,0,0,0,0",
+                                    "1783449889498,10.64.200.4,20.10.127.193,39924,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449903191,10.64.200.4,20.184.175.17,45390,443,6,O,B,NX,0,0,0,0",
+                                    "1783449903267,10.64.200.4,20.184.175.17,45390,443,6,O,E,NX,2,224,1,124",
+                                    "1783449903267,10.64.200.4,20.184.175.17,45390,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:46:10.4687005Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449909295,10.64.200.4,20.184.175.17,45390,443,6,O,E,NX,13,7131,14,6649",
+                                    "1783449914014,10.64.200.4,20.10.127.193,53014,443,6,O,B,NX,0,0,0,0",
+                                    "1783449914024,10.64.200.4,20.10.127.193,53014,443,6,O,E,NX,2,224,1,124",
+                                    "1783449914024,10.64.200.4,20.10.127.193,53014,443,6,O,B,NX,0,0,0,0",
+                                    "1783449919557,10.64.200.4,20.10.127.193,53014,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783449944060,10.64.200.4,20.10.127.193,59930,443,6,O,B,NX,0,0,0,0",
+                                    "1783449944061,10.64.200.4,20.10.127.193,59930,443,6,O,E,NX,2,224,1,124",
+                                    "1783449944061,10.64.200.4,20.10.127.193,59930,443,6,O,B,NX,0,0,0,0",
+                                    "1783449949609,10.64.200.4,20.10.127.193,59930,443,6,O,E,NX,12,8207,10,7460"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:47:10.4631069Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "00000000-0000-0000-0000-000000000000",
+                        "flowGroups": [
+                            {
+                                "rule": "PlatformRule",
+                                "flowTuples": [
+                                    "1783449990417,10.64.200.4,52.123.251.75,36574,443,6,O,C,NX,12,1584,0,0"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783449969744,10.64.200.4,52.123.251.24,32942,443,6,O,E,NX,7,3757,5,1459",
+                                    "1783449969855,10.64.200.4,52.123.251.24,32948,443,6,O,E,NX,11,3863,12,9893",
+                                    "1783449974104,10.64.200.4,20.10.127.192,51422,443,6,O,B,NX,0,0,0,0",
+                                    "1783449974117,10.64.200.4,20.10.127.192,51422,443,6,O,E,NX,2,224,1,124",
+                                    "1783449974117,10.64.200.4,20.10.127.192,51422,443,6,O,B,NX,0,0,0,0",
+                                    "1783449979678,10.64.200.4,20.10.127.192,51422,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450004226,10.64.200.4,20.10.127.192,47264,443,6,O,B,NX,0,0,0,0",
+                                    "1783450004236,10.64.200.4,20.10.127.192,47264,443,6,O,E,NX,2,224,1,124",
+                                    "1783450004236,10.64.200.4,20.10.127.192,47264,443,6,O,B,NX,0,0,0,0",
+                                    "1783450009816,10.64.200.4,20.10.127.192,47264,443,6,O,E,NX,13,8315,10,7465"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:48:10.4682294Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450034282,10.64.200.4,20.10.127.192,57158,443,6,O,B,NX,0,0,0,0",
+                                    "1783450034302,10.64.200.4,20.10.127.192,57158,443,6,O,E,NX,2,224,1,124",
+                                    "1783450034302,10.64.200.4,20.10.127.192,57158,443,6,O,B,NX,0,0,0,0",
+                                    "1783450039854,10.64.200.4,20.10.127.192,57158,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450064350,10.64.200.4,20.10.127.192,53316,443,6,O,B,NX,0,0,0,0",
+                                    "1783450064358,10.64.200.4,20.10.127.192,53316,443,6,O,E,NX,2,224,1,124",
+                                    "1783450064358,10.64.200.4,20.10.127.192,53316,443,6,O,B,NX,0,0,0,0",
+                                    "1783450069874,10.64.200.4,20.10.127.192,53316,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:49:10.4647700Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450094398,10.64.200.4,20.10.127.193,36010,443,6,O,B,NX,0,0,0,0",
+                                    "1783450094408,10.64.200.4,20.10.127.193,36010,443,6,O,E,NX,2,224,1,124",
+                                    "1783450094408,10.64.200.4,20.10.127.193,36010,443,6,O,B,NX,0,0,0,0",
+                                    "1783450099975,10.64.200.4,20.10.127.193,36010,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783450124443,10.64.200.4,20.10.127.193,50284,443,6,O,B,NX,0,0,0,0",
+                                    "1783450124453,10.64.200.4,20.10.127.193,50284,443,6,O,E,NX,2,224,1,124",
+                                    "1783450124453,10.64.200.4,20.10.127.193,50284,443,6,O,B,NX,0,0,0,0",
+                                    "1783450130049,10.64.200.4,20.10.127.193,50284,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:50:10.4666544Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450154491,10.64.200.4,20.10.127.192,54964,443,6,O,B,NX,0,0,0,0",
+                                    "1783450154505,10.64.200.4,20.10.127.192,54964,443,6,O,E,NX,2,224,1,124",
+                                    "1783450154505,10.64.200.4,20.10.127.192,54964,443,6,O,B,NX,0,0,0,0",
+                                    "1783450161483,10.64.200.4,20.10.127.192,54964,443,6,O,E,NX,13,8315,10,7460",
+                                    "1783450186059,10.64.200.4,20.10.127.193,39688,443,6,O,B,NX,0,0,0,0",
+                                    "1783450186067,10.64.200.4,20.10.127.193,39688,443,6,O,E,NX,2,224,1,124",
+                                    "1783450186067,10.64.200.4,20.10.127.193,39688,443,6,O,B,NX,0,0,0,0",
+                                    "1783450191638,10.64.200.4,20.10.127.193,39688,443,6,O,E,NX,13,8315,13,7808"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:51:10.4647149Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450216118,10.64.200.4,20.10.127.192,42952,443,6,O,B,NX,0,0,0,0",
+                                    "1783450216128,10.64.200.4,20.10.127.192,42952,443,6,O,E,NX,2,224,1,124",
+                                    "1783450216128,10.64.200.4,20.10.127.192,42952,443,6,O,B,NX,0,0,0,0",
+                                    "1783450221645,10.64.200.4,20.10.127.192,42952,443,6,O,E,NX,14,8423,11,7576",
+                                    "1783450246173,10.64.200.4,20.10.127.193,36536,443,6,O,B,NX,0,0,0,0",
+                                    "1783450246181,10.64.200.4,20.10.127.193,36536,443,6,O,E,NX,2,224,1,124",
+                                    "1783450246181,10.64.200.4,20.10.127.193,36536,443,6,O,B,NX,0,0,0,0",
+                                    "1783450251694,10.64.200.4,20.10.127.193,36536,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:52:10.4683214Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "00000000-0000-0000-0000-000000000000",
+                        "flowGroups": [
+                            {
+                                "rule": "PlatformRule",
+                                "flowTuples": [
+                                    "1783450290443,10.64.200.4,52.123.251.75,36574,443,6,O,C,NX,3,396,0,0"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450276224,10.64.200.4,20.10.127.192,55694,443,6,O,B,NX,0,0,0,0",
+                                    "1783450276232,10.64.200.4,20.10.127.192,55694,443,6,O,E,NX,2,224,1,124",
+                                    "1783450276232,10.64.200.4,20.10.127.192,55694,443,6,O,B,NX,0,0,0,0",
+                                    "1783450279448,10.64.200.4,20.42.73.28,54638,443,6,O,B,NX,0,0,0,0",
+                                    "1783450279461,10.64.200.4,20.42.73.28,54638,443,6,O,E,NX,2,224,1,124",
+                                    "1783450279461,10.64.200.4,20.42.73.28,54638,443,6,O,B,NX,0,0,0,0",
+                                    "1783450281780,10.64.200.4,20.10.127.192,55694,443,6,O,E,NX,13,8315,12,7692",
+                                    "1783450284954,10.64.200.4,20.42.73.28,54638,443,6,O,E,NX,13,7057,14,6648",
+                                    "1783450288575,10.64.200.4,20.42.65.91,40098,443,6,O,B,NX,0,0,0,0",
+                                    "1783450288584,10.64.200.4,20.42.65.91,40098,443,6,O,E,NX,2,224,1,124",
+                                    "1783450288584,10.64.200.4,20.42.65.91,40098,443,6,O,B,NX,0,0,0,0",
+                                    "1783450294184,10.64.200.4,20.42.65.91,40098,443,6,O,E,NX,13,9781,14,6648",
+                                    "1783450306265,10.64.200.4,20.10.127.193,38092,443,6,O,B,NX,0,0,0,0",
+                                    "1783450306275,10.64.200.4,20.10.127.193,38092,443,6,O,E,NX,2,224,1,124",
+                                    "1783450306275,10.64.200.4,20.10.127.193,38092,443,6,O,B,NX,0,0,0,0",
+                                    "1783450313384,10.64.200.4,20.10.127.193,38092,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:53:10.4750565Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450337850,10.64.200.4,20.10.127.193,43776,443,6,O,B,NX,0,0,0,0",
+                                    "1783450337856,10.64.200.4,20.10.127.193,43776,443,6,O,E,NX,2,224,1,124",
+                                    "1783450337856,10.64.200.4,20.10.127.193,43776,443,6,O,B,NX,0,0,0,0",
+                                    "1783450343377,10.64.200.4,20.10.127.193,43776,443,6,O,E,NX,13,8315,10,7465",
+                                    "1783450367888,10.64.200.4,20.10.127.193,59118,443,6,O,B,NX,0,0,0,0",
+                                    "1783450367898,10.64.200.4,20.10.127.193,59118,443,6,O,E,NX,2,224,1,124",
+                                    "1783450367898,10.64.200.4,20.10.127.193,59118,443,6,O,B,NX,0,0,0,0",
+                                    "1783450373416,10.64.200.4,20.10.127.193,59118,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:54:10.4927452Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450397939,10.64.200.4,20.10.127.193,38380,443,6,O,B,NX,0,0,0,0",
+                                    "1783450397940,10.64.200.4,20.10.127.193,38380,443,6,O,E,NX,2,224,1,124",
+                                    "1783450397940,10.64.200.4,20.10.127.193,38380,443,6,O,B,NX,0,0,0,0",
+                                    "1783450403572,10.64.200.4,20.10.127.193,38380,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450427991,10.64.200.4,20.10.127.192,35774,443,6,O,B,NX,0,0,0,0",
+                                    "1783450428007,10.64.200.4,20.10.127.192,35774,443,6,O,E,NX,2,224,1,124",
+                                    "1783450428007,10.64.200.4,20.10.127.192,35774,443,6,O,B,NX,0,0,0,0",
+                                    "1783450433553,10.64.200.4,20.10.127.192,35774,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:55:10.5183335Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450458042,10.64.200.4,20.10.127.192,43442,443,6,O,B,NX,0,0,0,0",
+                                    "1783450458055,10.64.200.4,20.10.127.192,43442,443,6,O,E,NX,2,224,1,124",
+                                    "1783450458055,10.64.200.4,20.10.127.192,43442,443,6,O,B,NX,0,0,0,0",
+                                    "1783450463605,10.64.200.4,20.10.127.192,43442,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450488089,10.64.200.4,20.10.127.192,45704,443,6,O,B,NX,0,0,0,0",
+                                    "1783450488100,10.64.200.4,20.10.127.192,45704,443,6,O,E,NX,2,224,1,124",
+                                    "1783450488100,10.64.200.4,20.10.127.192,45704,443,6,O,B,NX,0,0,0,0",
+                                    "1783450496216,10.64.200.4,20.10.127.192,45704,443,6,O,E,NX,14,8423,11,7576",
+                                    "1783450503199,10.64.200.4,20.42.65.85,36146,443,6,O,B,NX,0,0,0,0",
+                                    "1783450503207,10.64.200.4,20.42.65.85,36146,443,6,O,E,NX,2,224,1,124",
+                                    "1783450503207,10.64.200.4,20.42.65.85,36146,443,6,O,B,NX,0,0,0,0"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:56:10.5301186Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450509395,10.64.200.4,20.42.65.85,36146,443,6,O,E,NX,14,7241,14,6649",
+                                    "1783450520699,10.64.200.4,20.10.127.192,54870,443,6,O,B,NX,0,0,0,0",
+                                    "1783450520711,10.64.200.4,20.10.127.192,54870,443,6,O,E,NX,2,224,1,124",
+                                    "1783450520711,10.64.200.4,20.10.127.192,54870,443,6,O,B,NX,0,0,0,0",
+                                    "1783450526248,10.64.200.4,20.10.127.192,54870,443,6,O,E,NX,14,8423,10,7460",
+                                    "1783450550748,10.64.200.4,20.10.127.192,51246,443,6,O,B,NX,0,0,0,0",
+                                    "1783450550757,10.64.200.4,20.10.127.192,51246,443,6,O,E,NX,2,224,1,124",
+                                    "1783450550757,10.64.200.4,20.10.127.192,51246,443,6,O,B,NX,0,0,0,0",
+                                    "1783450556256,10.64.200.4,20.10.127.192,51246,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:57:10.5317861Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "00000000-0000-0000-0000-000000000000",
+                        "flowGroups": [
+                            {
+                                "rule": "PlatformRule",
+                                "flowTuples": [
+                                    "1783450590493,10.64.200.4,52.123.251.75,36574,443,6,O,C,NX,2,264,0,0"
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450580783,10.64.200.4,20.10.127.192,43110,443,6,O,B,NX,0,0,0,0",
+                                    "1783450580795,10.64.200.4,20.10.127.192,43110,443,6,O,E,NX,2,224,1,124",
+                                    "1783450580795,10.64.200.4,20.10.127.192,43110,443,6,O,B,NX,0,0,0,0",
+                                    "1783450586420,10.64.200.4,20.10.127.192,43110,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450610844,10.64.200.4,20.10.127.192,38510,443,6,O,B,NX,0,0,0,0",
+                                    "1783450610861,10.64.200.4,20.10.127.192,38510,443,6,O,E,NX,2,224,1,124",
+                                    "1783450610861,10.64.200.4,20.10.127.192,38510,443,6,O,B,NX,0,0,0,0",
+                                    "1783450616366,10.64.200.4,20.10.127.192,38510,443,6,O,E,NX,13,8315,12,7692"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:58:10.5249566Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450640893,10.64.200.4,20.10.127.193,35694,443,6,O,B,NX,0,0,0,0",
+                                    "1783450640908,10.64.200.4,20.10.127.193,35694,443,6,O,E,NX,2,224,1,124",
+                                    "1783450640908,10.64.200.4,20.10.127.193,35694,443,6,O,B,NX,0,0,0,0",
+                                    "1783450646469,10.64.200.4,20.10.127.193,35694,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450670948,10.64.200.4,20.10.127.192,55534,443,6,O,B,NX,0,0,0,0",
+                                    "1783450670963,10.64.200.4,20.10.127.192,55534,443,6,O,E,NX,2,224,1,124",
+                                    "1783450670963,10.64.200.4,20.10.127.192,55534,443,6,O,B,NX,0,0,0,0",
+                                    "1783450676898,10.64.200.4,20.10.127.192,55534,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "time": "2026-07-07T18:59:10.5375896Z",
+            "flowLogGUID": "8ee0be10-fa14-47de-9329-fd1d0aa98b90",
+            "macAddress": "0022481D44FB",
+            "category": "FlowLogFlowEvent",
+            "flowLogResourceID": "/SUBSCRIPTIONS/5546F5AA-3766-4EF3-A3D4-EBF4C9D1C351/RESOURCEGROUPS/NETWORKWATCHERRG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NETWORKWATCHER_EASTUS/FLOWLOGS/VNET-EUS-WORKLOAD-1-RG-WORKLOAD-1-FLOWLOG",
+            "targetResourceID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/rg-workload-1/providers/Microsoft.Network/virtualNetworks/vnet-eus-workload-1",
+            "flowLogVersion": 4,
+            "operationName": "FlowLogFlowEvent",
+            "flowRecords": {
+                "flows": [
+                    {
+                        "aclID": "/subscriptions/5546f5aa-3766-4ef3-a3d4-ebf4c9d1c351/resourceGroups/RG-WORKLOAD-1/providers/Microsoft.Network/networkSecurityGroups/vm-p-backend-nsg",
+                        "flowGroups": [
+                            {
+                                "rule": "DefaultRule_AllowVnetOutBound",
+                                "flowTuples": [
+                                    "1783450701326,10.64.200.4,20.10.127.192,49384,443,6,O,B,NX,0,0,0,0",
+                                    "1783450701331,10.64.200.4,20.10.127.192,49384,443,6,O,E,NX,2,224,1,124",
+                                    "1783450701331,10.64.200.4,20.10.127.192,49384,443,6,O,B,NX,0,0,0,0",
+                                    "1783450706823,10.64.200.4,20.10.127.192,49384,443,6,O,E,NX,13,8315,11,7576",
+                                    "1783450731371,10.64.200.4,20.10.127.192,49030,443,6,O,B,NX,0,0,0,0",
+                                    "1783450731384,10.64.200.4,20.10.127.192,49030,443,6,O,E,NX,2,224,1,124",
+                                    "1783450731384,10.64.200.4,20.10.127.192,49030,443,6,O,B,NX,0,0,0,0",
+                                    "1783450736936,10.64.200.4,20.10.127.192,49030,443,6,O,E,NX,13,8315,11,7576"
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ]
+}
