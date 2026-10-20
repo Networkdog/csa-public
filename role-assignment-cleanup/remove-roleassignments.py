@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 
@@ -27,6 +27,9 @@ RBAC_API = "2022-04-01"
 PIM_API = "2020-10-01"
 ARG_API = "2024-04-01"
 MG_API = "2020-05-01"
+SUBSCRIPTION_API = "2022-12-01"
+OWNER_ROLE_ID = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+USER_ACCESS_ADMIN_ROLE_ID = "18d7d88d-d35e-4fb3-a5c3-7773c20a72d9"
 KINDS = ("regular", "pim-eligible", "pim-timebound", "pim-activated")
 PRINCIPAL_TYPES = (
     "User", "Group", "ServicePrincipal", "ManagedIdentity", "ForeignGroup",
@@ -38,6 +41,10 @@ WRITABLE_PROPERTIES = (
 )
 PIM_READY = {"Provisioned", "Granted", "ScheduleCreated", "Accepted"}
 PIM_TERMINAL = {"Revoked", "Canceled", "Denied", "Failed", "TimedOut", "Invalid"}
+PIM_ACCESS_EVENTS = {
+    "pim_activation_intent", "pim_activation_success", "pim_activation_failure",
+    "pim_activation_reused", "pim_cleanup_intent", "pim_cleanup_success", "pim_cleanup_failure",
+}
 
 
 class SafetyError(Exception):
@@ -307,31 +314,62 @@ def validate_assignment(raw, collection="roleAssignments"):
     return scope
 
 
+def get_subscription_name(client, identifier):
+    subscription = client.request("GET", api_path("/subscriptions/" + identifier, SUBSCRIPTION_API))
+    if (not isinstance(subscription, dict) or not isinstance(subscription.get("subscriptionId"), str)
+            or subscription["subscriptionId"].casefold() != identifier
+            or not isinstance(subscription.get("displayName"), str) or not subscription["displayName"].strip()):
+        raise SafetyError("Cannot evaluate the subscription display-name filter: " + identifier)
+    if subscription.get("tenantId") and (
+        not isinstance(subscription["tenantId"], str) or subscription["tenantId"].casefold() != client.tenant
+    ):
+        raise SafetyError("Subscription tenant does not match the execution tenant: " + identifier)
+    return subscription["displayName"]
+
+
+def verify_subscription_selection(client, selection, scope):
+    if not selection.subscription_name_contains:
+        return
+    if not selection.contains(scope):
+        raise SafetyError("Assignment is outside the filtered subscription selection.")
+    identifier = normalize_scope(scope).split("/")[2]
+    if get_subscription_name(client, identifier) != selection.subscription_names[identifier]:
+        raise SafetyError("Subscription display name changed after discovery; no mutation attempted.")
+
+
 def resolve_scope(client, selection):
-    if selection.kind != "management-group":
-        return selection
-    descendants = list(client.values(api_path(selection.root + "/descendants", MG_API)))
-    parents = {}
-    for descendant in descendants:
-        identifier = normalize_scope(descendant.get("id"))
-        parent = normalize_scope(descendant.get("properties", {}).get("parent", {}).get("id"))
-        parents[identifier] = parent
-    for identifier in parents:
-        visited = set()
-        cursor = identifier
-        while cursor != selection.root:
-            if cursor in visited or cursor not in parents:
-                raise SafetyError("Management group descendant ancestry is incomplete.")
-            visited.add(cursor)
-            cursor = parents[cursor]
-        if identifier.startswith("/subscriptions/") and len(identifier.split("/")) == 3:
-            selection.subscriptions.add(identifier.split("/")[2])
-        elif identifier.startswith("/providers/microsoft.management/managementgroups/"):
-            selection.management_groups.add(identifier)
-        else:
-            raise SafetyError("Unexpected management group descendant type.")
-    if len(selection.subscriptions) > 10000:
-        raise SafetyError("More than 10,000 subscriptions: run explicit smaller scopes; partial ARG scopes are not allowed.")
+    if selection.kind == "management-group":
+        descendants = list(client.values(api_path(selection.root + "/descendants", MG_API)))
+        parents = {}
+        for descendant in descendants:
+            identifier = normalize_scope(descendant.get("id"))
+            parent = normalize_scope(descendant.get("properties", {}).get("parent", {}).get("id"))
+            parents[identifier] = parent
+        for identifier in parents:
+            visited = set()
+            cursor = identifier
+            while cursor != selection.root:
+                if cursor in visited or cursor not in parents:
+                    raise SafetyError("Management group descendant ancestry is incomplete.")
+                visited.add(cursor)
+                cursor = parents[cursor]
+            if identifier.startswith("/subscriptions/") and len(identifier.split("/")) == 3:
+                selection.subscriptions.add(identifier.split("/")[2])
+            elif identifier.startswith("/providers/microsoft.management/managementgroups/"):
+                selection.management_groups.add(identifier)
+            else:
+                raise SafetyError("Unexpected management group descendant type.")
+        if len(selection.subscriptions) > 10000:
+            raise SafetyError("More than 10,000 subscriptions: run explicit smaller scopes; partial ARG scopes are not allowed.")
+    if selection.subscription_name_contains:
+        identifiers = sorted(selection.subscriptions) if selection.kind == "management-group" else [selection.root.split("/")[2]]
+        names = {}
+        for identifier in identifiers:
+            name = get_subscription_name(client, identifier)
+            if any(value.casefold() in name.casefold() for value in selection.subscription_name_contains):
+                names[identifier] = name
+        selection.subscriptions = set(names)
+        selection.subscription_names = names
     return selection
 
 
@@ -374,12 +412,8 @@ def arg_assignments(client, selection, filters, reporter):
 
 
 def arm_assignments(client, selection):
-    if selection.kind == "management-group":
-        scopes = sorted(selection.management_groups) + ["/subscriptions/" + item for item in sorted(selection.subscriptions)]
-    else:
-        scopes = [selection.root]
     results = {}
-    for scope in scopes:
+    for scope in selection.read_scopes():
         query = {"$filter": "atScope()"} if scope.startswith("/providers/") else {}
         path = api_path(scope + "/providers/Microsoft.Authorization/roleAssignments", RBAC_API, **query)
         for raw in client.values(path):
@@ -735,9 +769,7 @@ class PimInventory:
         self.exact_scopes = set()
 
     def roots(self):
-        if self.selection.kind == "management-group":
-            return sorted(self.selection.management_groups) + ["/subscriptions/" + item for item in sorted(self.selection.subscriptions)]
-        return [self.selection.root]
+        return self.selection.read_scopes()
 
     def load(self, scope, exact=False):
         scope = normalize_scope(scope)
@@ -876,6 +908,12 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
     if assume_no_pim and set(filters.assignment_kind) != {"regular"}:
         raise SafetyError("--assume-no-pim is only allowed with --assignment-kind regular.")
     resolve_scope(client, selection)
+    if selection.subscription_name_contains:
+        reporter.emit("Subscriptions matching display-name filter: {}.".format(len(selection.subscriptions)))
+        for identifier, name in sorted(selection.subscription_names.items()):
+            reporter.emit("Subscription: {} | {}".format(name, identifier))
+        if not selection.subscriptions:
+            return [], PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
     candidates = arg_assignments(client, selection, filters, reporter) if source == "arg" else arm_assignments(client, selection)
     identifiers = sorted({raw["id"] for raw in candidates if selection.contains(entity_scope(raw["id"], "roleAssignments"))})
     reporter.emit("RBAC candidates: {}. Reading live properties and PIM state.".format(len(identifiers)))
@@ -937,6 +975,8 @@ def scope_document(selection):
     return {
         "kind": selection.kind, "root": selection.root, "include_children": selection.include_children,
         "management_groups": sorted(selection.management_groups), "subscriptions": sorted(selection.subscriptions),
+        "subscription_name_contains": list(selection.subscription_name_contains),
+        "subscription_names": dict(selection.subscription_names),
     }
 
 
@@ -950,9 +990,20 @@ def scope_from_document(value):
             raise ValueError("Scope kind/root mismatch")
         if not isinstance(value["include_children"], bool):
             raise ValueError("Invalid descendant setting")
+        keywords = value.get("subscription_name_contains", [])
+        names = value.get("subscription_names", {})
+        if (not isinstance(keywords, list) or any(not isinstance(item, str) or not item.strip() for item in keywords)
+                or not isinstance(names, dict) or any(not isinstance(name, str) or not name.strip() for name in names.values())):
+            raise ValueError("Invalid subscription display-name filter")
+        subscriptions = {guid(item) for item in value["subscriptions"]}
+        names = {guid(item): name for item, name in names.items()}
+        if keywords and (set(names) != subscriptions or any(
+            not any(keyword.casefold() in name.casefold() for keyword in keywords) for name in names.values()
+        )):
+            raise ValueError("Subscription names do not match the recorded selection")
         return ScopeSelection(kind, root, value["include_children"],
                               {normalize_scope(item) for item in value["management_groups"]},
-                              {guid(item) for item in value["subscriptions"]})
+                              subscriptions, tuple(keywords), names)
     except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError) as error:
         raise SafetyError("Malformed scope in rollback journal.") from error
 
@@ -1008,6 +1059,8 @@ def removal_observed(client, record):
             return False
     origins = {record.rbac["id"]} if record.rbac else set()
     if record.route == "assignment":
+        origins.update(reference_id(record.scope, instance["properties"]["originRoleAssignmentId"], "roleAssignments")
+                       for instance in record.instances if instance["properties"].get("originRoleAssignmentId"))
         path = api_path(record.scope + "/providers/Microsoft.Authorization/roleAssignmentScheduleInstances", PIM_API, **{"$filter": "atScope()"})
         for instance in client.values(path):
             properties = instance.get("properties", {})
@@ -1032,6 +1085,7 @@ def wait_removed(client, record, timeout):
 
 
 def refresh_record(client, record, inventory, filters=None):
+    verify_subscription_selection(client, inventory.selection, record.scope)
     inventory.load(record.scope, exact=True)
     if record.route == "rbac":
         raw = get_live_assignment(client, record.identifier)
@@ -1085,7 +1139,271 @@ def pim_remove_body(record):
     return {"properties": properties}
 
 
+class TemporaryPimAccess:
+    def __init__(self, eligibility, activation=None):
+        self.eligibility = eligibility
+        self.activation = activation
+        self.reused = activation is not None
+        self.request_id = str(uuid.uuid4())
+        self.attempted = False
+        self.rejected = False
+        self.deactivate_after = 0
+
+    def endpoint(self, request_id=None):
+        return api_path(self.eligibility.scope + "/providers/Microsoft.Authorization/roleAssignmentScheduleRequests/"
+                        + (request_id or self.request_id), PIM_API)
+
+    def target(self, response):
+        properties = response.get("properties", {}) if isinstance(response, dict) else {}
+        if properties.get("requestType") != "SelfActivate" or not same_assignment(self.eligibility.raw, response):
+            raise SafetyError("Temporary PIM request identity does not match the confirmed eligibility.")
+        return reference_id(self.eligibility.scope, properties.get("targetRoleAssignmentScheduleId"), "roleAssignmentSchedules")
+
+    def wait_activation(self, client, target, timeout, reporter, require_backing=True):
+        deadline = time.monotonic() + timeout
+        inventory = PimInventory(client, ScopeSelection("subscription", self.eligibility.scope), reporter)
+        while True:
+            inventory.load(self.eligibility.scope, exact=True)
+            schedule = inventory.schedules.get(target.casefold())
+            if schedule and pim_kind(schedule, "assignment") is not None:
+                linked = reference_id(self.eligibility.scope, schedule["properties"].get("linkedRoleEligibilityScheduleId"),
+                                      "roleEligibilitySchedules")
+                if (pim_kind(schedule, "assignment") != "pim-activated"
+                        or not same_assignment(self.eligibility.raw, schedule)
+                        or linked != self.eligibility.identifier.casefold()):
+                    raise SafetyError("Temporary PIM activation does not match the confirmed eligibility.")
+                instances = inventory.instances_for(schedule)
+                if len(instances) > 1:
+                    raise SafetyError("Temporary PIM activation has multiple instances.")
+                if instances or not require_backing:
+                    backing = None
+                    if require_backing:
+                        origin = reference_id(self.eligibility.scope, instances[0]["properties"].get("originRoleAssignmentId"),
+                                              "roleAssignments")
+                        backing = get_live_assignment(client, origin)
+                    if backing or not require_backing:
+                        activation = (inventory.from_schedule(schedule, "assignment", backing) if instances
+                                      else AssignmentRecord(schedule, route="assignment", kind="pim-activated"))
+                        if activation is not None:
+                            self.activation = activation
+                            self.deactivate_after = time.monotonic() + 300
+                            return
+            if time.monotonic() >= deadline:
+                raise SafetyError("Temporary PIM activation is not observable in both PIM and live RBAC.")
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
+
+    def activate(self, client, journal, timeout, reporter):
+        current = client.get_optional(api_path(self.eligibility.identifier, PIM_API))
+        if current is None:
+            raise SafetyError("PIM eligibility disappeared after discovery; no activation attempted.")
+        validate_assignment(current, "roleEligibilitySchedules")
+        if AssignmentRecord(current, route="eligibility", kind="pim-eligible").fingerprint() != self.eligibility.fingerprint():
+            raise SafetyError("PIM eligibility changed after discovery; no activation attempted.")
+        if self.reused:
+            self.wait_activation(client, self.activation.identifier, timeout, reporter)
+            journal.append("pim_activation_reused", scope=self.eligibility.scope, activationId=self.activation.identifier)
+            reporter.emit("Using existing PIM activation (will not deactivate it): " + self.eligibility.scope)
+            return
+        now = utc_now()
+        end = min(now + timedelta(hours=1), self.eligibility.end) if self.eligibility.end else now + timedelta(hours=1)
+        end = end.replace(microsecond=0)
+        if (end - now).total_seconds() < 300:
+            raise SafetyError("PIM eligibility has less than five minutes remaining.")
+        properties = {
+            "principalId": self.eligibility.properties["principalId"],
+            "roleDefinitionId": self.eligibility.properties["roleDefinitionId"],
+            "requestType": "SelfActivate", "linkedRoleEligibilityScheduleId": self.eligibility.identifier.rsplit("/", 1)[1],
+            "justification": "Temporarily activate existing eligibility for Owner removal by remove-roleassignments.py",
+            "scheduleInfo": {"startDateTime": iso_time(now), "expiration": {"type": "AfterDateTime", "endDateTime": iso_time(end)}},
+        }
+        journal.append("pim_activation_intent", activationRequestId=self.request_id, scope=self.eligibility.scope,
+                       eligibilityId=self.eligibility.identifier, principalId=properties["principalId"],
+                       roleDefinitionId=properties["roleDefinitionId"], expiresAt=iso_time(end))
+        self.attempted = True
+        reporter.emit("Activating temporary PIM access: " + self.eligibility.scope)
+        try:
+            client.request("PUT", self.endpoint(), {"properties": properties})
+        except ApiError as error:
+            self.rejected = error.status in (400, 401, 403, 404, 409, 422, 429)
+            raise
+        response = wait_pim_request(client, self.endpoint(), timeout, reporter)
+        self.wait_activation(client, self.target(response), timeout, reporter)
+        if self.activation.end is None or self.activation.end > end:
+            raise SafetyError("Temporary PIM activation did not preserve the requested bounded expiration.")
+        journal.append("pim_activation_success", activationRequestId=self.request_id, activation=self.activation.snapshot())
+        client.access_token("arm", refresh=True)
+
+    def cleanup(self, client, journal, timeout, reporter):
+        if not self.attempted:
+            return
+        if self.rejected:
+            journal.append("pim_cleanup_success", activationRequestId=self.request_id, status="activation_rejected")
+            return
+        response = client.get_optional(self.endpoint())
+        if response is None:
+            raise SafetyError("Temporary PIM activation request is not observable; inspect request " + self.request_id)
+        status = response.get("properties", {}).get("status")
+        if status not in PIM_TERMINAL and status not in ("Provisioned", "Granted", "ScheduleCreated"):
+            journal.append("pim_cleanup_intent", activationRequestId=self.request_id, operation="cancel")
+            cancel_path = api_path(self.eligibility.scope + "/providers/Microsoft.Authorization/roleAssignmentScheduleRequests/"
+                                   + self.request_id + "/cancel", PIM_API)
+            try:
+                client.request("POST", cancel_path)
+            except ApiError as error:
+                if error.status != 409:
+                    raise
+                reporter.emit("PIM cancellation raced with provisioning; checking this request before cleanup.")
+            response = client.request("GET", self.endpoint())
+            status = response.get("properties", {}).get("status")
+        if status in PIM_TERMINAL:
+            probe = self.activation
+            if probe is None and response.get("properties", {}).get("targetRoleAssignmentScheduleId"):
+                probe = AssignmentRecord({"id": self.target(response), "properties": dict(self.eligibility.properties)},
+                                         route="assignment", kind="pim-activated")
+            if probe is None or removal_observed(client, probe):
+                journal.append("pim_cleanup_success", activationRequestId=self.request_id, status=status)
+                return
+            reporter.emit("PIM request is terminal but its activation remains; cleaning up the observed activation.")
+        elif status not in ("Provisioned", "Granted", "ScheduleCreated"):
+            raise SafetyError("Temporary PIM request is still pending; cancel it in PIM: " + self.request_id)
+        if self.activation is None:
+            self.wait_activation(client, self.target(response), timeout, reporter, require_backing=False)
+        if not removal_observed(client, self.activation):
+            delay = max(0, self.deactivate_after - time.monotonic())
+            if delay:
+                reporter.emit("Waiting up to {:.0f}s for Azure PIM's five-minute minimum before deactivation.".format(delay))
+                time.sleep(delay)
+            if not removal_observed(client, self.activation):
+                request_id = str(uuid.uuid4())
+                journal.append("pim_cleanup_intent", activationRequestId=self.request_id, operation="SelfDeactivate",
+                               requestId=request_id, activationId=self.activation.identifier)
+                properties = {
+                    "principalId": self.activation.properties["principalId"],
+                    "roleDefinitionId": self.activation.properties["roleDefinitionId"],
+                    "requestType": "SelfDeactivate", "targetRoleAssignmentScheduleId": self.activation.identifier.rsplit("/", 1)[1],
+                    "justification": "End temporary Owner-removal access created by remove-roleassignments.py",
+                }
+                endpoint = self.endpoint(request_id)
+                client.request("PUT", endpoint, {"properties": properties})
+                wait_pim_request(client, endpoint, timeout, reporter)
+                wait_removed(client, self.activation, timeout)
+        journal.append("pim_cleanup_success", activationRequestId=self.request_id, status="deactivated_or_expired")
+        client.access_token("arm", refresh=True)
+        reporter.emit("Temporary PIM access removed: " + self.eligibility.scope)
+
+
+def plan_pim_owner_access(client, inventory, actionable, reporter):
+    scopes = sorted({record.scope for record in actionable
+                     if record.scope.startswith("/subscriptions/") and len(record.scope.split("/")) == 3
+                     and record.properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold() == OWNER_ROLE_ID})
+    if not scopes:
+        reporter.emit("PIM Owner-removal helper: no removable subscription-level Owner assignments.")
+        return []
+    if not client.actor_id:
+        raise SafetyError("Caller Object ID is required to activate existing PIM eligibility.")
+    actor = client.actor_id.casefold()
+    targeted = {(record.scope, record.properties["principalId"].casefold(),
+                 record.properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold()) for record in actionable}
+    inventory.include_eligible = True
+    plans = []
+    for scope in scopes:
+        inventory.load(scope, exact=True)
+        candidates = []
+        for raw in inventory.eligibilities.values():
+            properties = raw["properties"]
+            role = properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold()
+            if (normalize_scope(properties["scope"]) != scope or properties["principalId"].casefold() != actor
+                    or properties.get("principalType") != "User" or role not in (OWNER_ROLE_ID, USER_ACCESS_ADMIN_ROLE_ID)
+                    or properties.get("condition") or (scope, actor, role) in targeted):
+                continue
+            if pim_kind(raw, "eligibility") is None:
+                continue
+            start, end = parse_time(properties.get("startDateTime")), parse_time(properties.get("endDateTime"))
+            if (start and start > utc_now()) or (end and (end - utc_now()).total_seconds() < 300):
+                continue
+            eligibility = inventory.from_schedule(raw, "eligibility")
+            if eligibility is None:
+                continue
+            activations = [schedule for schedule in inventory.schedules.values()
+                           if same_assignment(raw, schedule) and pim_kind(schedule, "assignment") == "pim-activated"]
+            if len(activations) > 1:
+                raise SafetyError("Multiple PIM activations match a temporary-access candidate.")
+            activation = inventory.from_schedule(activations[0], "assignment") if activations else None
+            candidates.append((activation is None, role != USER_ACCESS_ADMIN_ROLE_ID, eligibility.identifier,
+                               TemporaryPimAccess(eligibility, activation)))
+        if not candidates:
+            raise SafetyError("No usable direct, unconditional caller Eligible Owner/User Access Administrator at " + scope
+                              + ". The source eligibility/role must not be in the deletion set; new eligibility is never created.")
+        plan = min(candidates, key=lambda item: item[:3])[3]
+        plans.append(plan)
+        reporter.emit("PIM Owner-removal plan: {} | {} | {}".format(
+            scope, plan.eligibility.identifier,
+            "reuse existing activation" if plan.reused else "activate for at most one hour, then deactivate"))
+    return plans
+
+
+def pending_pim_access(rows):
+    pending = {}
+    for row in rows:
+        request_id = row.get("activationRequestId")
+        if row.get("event") == "pim_activation_intent":
+            pending[request_id] = dict(row)
+        elif row.get("event") == "pim_activation_success" and request_id in pending:
+            pending[request_id]["activation"] = row.get("activation")
+        elif row.get("event") == "pim_cleanup_success":
+            pending.pop(request_id, None)
+    return list(pending.values())
+
+
+def check_pim_cleanup(client, pending, selection, reporter):
+    unresolved = 0
+    for access in pending:
+        try:
+            scope = normalize_scope(access.get("scope"))
+            if not scope.startswith("/subscriptions/") or len(scope.split("/")) != 3 or not selection.contains(scope):
+                raise SafetyError("Temporary PIM scope is outside the original subscription selection.")
+            expected = {"id": access.get("eligibilityId"), "properties": {
+                "scope": scope, "principalId": access.get("principalId"), "roleDefinitionId": access.get("roleDefinitionId"),
+            }}
+            validate_assignment(expected, "roleEligibilitySchedules")
+            if access.get("activation"):
+                record = AssignmentRecord.from_snapshot(access["activation"])
+                if record.route != "assignment" or record.kind != "pim-activated" or not same_assignment(expected, record.raw):
+                    raise SafetyError("Temporary PIM snapshot does not match its activation intent.")
+            else:
+                endpoint = api_path(reference_id(scope, access.get("activationRequestId"), "roleAssignmentScheduleRequests"), PIM_API)
+                response = client.get_optional(endpoint)
+                if (not isinstance(response, dict) or not isinstance(response.get("properties"), dict)
+                        or response["properties"].get("requestType") != "SelfActivate" or not same_assignment(expected, response)):
+                    raise SafetyError("Temporary PIM request outcome is not observable.")
+                properties = response["properties"]
+                if properties.get("status") not in PIM_TERMINAL | {"Provisioned", "Granted", "ScheduleCreated"}:
+                    raise SafetyError("Temporary PIM activation request is still pending; cancel it in PIM.")
+                target = properties.get("targetRoleAssignmentScheduleId")
+                if not target:
+                    if properties.get("status") not in PIM_TERMINAL:
+                        raise SafetyError("Temporary PIM request has no observable target.")
+                    reporter.emit("Temporary PIM request is terminal: " + str(access.get("activationRequestId")))
+                    continue
+                target = reference_id(scope, target, "roleAssignmentSchedules")
+                current = client.get_optional(api_path(target, PIM_API))
+                if current is None and properties.get("status") not in PIM_TERMINAL:
+                    raise SafetyError("Temporary PIM target is not observable; its creation outcome is uncertain.")
+                record = AssignmentRecord({"id": target, "properties": expected["properties"]},
+                                          route="assignment", kind="pim-activated")
+            if not removal_observed(client, record):
+                raise SafetyError("Temporary PIM activation or backing RBAC assignment is still present.")
+            reporter.emit("Temporary PIM cleanup verified: " + str(access.get("activationRequestId")))
+        except (SafetyError, OSError) as error:
+            unresolved += 1
+            reporter.emit("MANUAL PIM CHECK REQUIRED: {} | request {} | expiry {} | {}".format(
+                access.get("scope"), access.get("activationRequestId"), access.get("expiresAt"), error))
+    return unresolved
+
+
 def execute_delete(client, args, reporter):
+    if args.use_pim_for_owner_removal and args.assume_no_pim:
+        raise SafetyError("--use-pim-for-owner-removal cannot be combined with --assume-no-pim.")
     selection = scope_from_args(args)
     filters = FilterSpec.from_args(args)
     path = journal_path(args)
@@ -1106,18 +1424,23 @@ def execute_delete(client, args, reporter):
             blocked[record.key] = "Linked activation is outside the confirmed removable set; eligibility removal blocked."
     actionable = [record for record in records if record.key not in blocked]
     actionable.sort(key=lambda record: (record.route == "eligibility", -record.scope.count("/"), record.key))
+    pim_access = plan_pim_owner_access(client, inventory, actionable, reporter) if args.use_pim_for_owner_removal else []
     reporter.emit("Removable: {} | Protected: {}".format(len(actionable), len(blocked)))
     for index, record in enumerate(records):
         if reporter.verbose or index < 10:
             reporter.emit(describe_record(record) + (" | PROTECTED: " + blocked[record.key] if record.key in blocked else ""))
     if len(records) > 10 and not reporter.verbose:
         reporter.emit("First 10 shown; the complete matching list is in the journal.")
-    deleted, skipped, failed = 0, 0, 0
+    deleted, skipped, failed, pim_failed = 0, 0, 0, 0
     with RollbackJournal(path, create=True) as journal:
         journal.append("header", schemaVersion=1, runId=str(uuid.uuid4()), mode="apply" if args.apply else "dry-run",
                        tenantId=client.tenant, cloud=client.cloud, callerId=client.actor_id,
                        selection=scope_document(selection), filters=asdict(filters), source=args.source,
-                       pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified")
+                       pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified",
+                       pimOwnerRemoval=args.use_pim_for_owner_removal,
+                       temporaryPimAccess=[{"scope": access.eligibility.scope, "eligibilityId": access.eligibility.identifier,
+                                            "roleDefinitionId": access.eligibility.properties["roleDefinitionId"],
+                                            "reuse": access.reused} for access in pim_access])
         for record in records:
             journal.append("snapshot", key=record.key, record=record.snapshot(), blockedReason=blocked.get(record.key))
         journal.append("plan_complete", count=len(records), actionable=len(actionable))
@@ -1132,13 +1455,27 @@ def execute_delete(client, args, reporter):
             reporter.emit("Canceled. Azure mutations=0.")
             return 130
         client.verify_context()
-        if selection.kind == "management-group":
-            fresh = resolve_scope(client, ScopeSelection("management-group", selection.root, management_groups={selection.root}))
+        if selection.kind == "management-group" or selection.subscription_name_contains:
+            fresh = resolve_scope(client, scope_from_args(args))
             if scope_document(fresh) != scope_document(selection):
-                raise SafetyError("Management group hierarchy changed after discovery.")
+                raise SafetyError("Scope hierarchy or subscription display names changed after discovery.")
         client.allow_writes = True
+        journal_healthy = True
         try:
+            for access in pim_access:
+                try:
+                    verify_subscription_selection(client, selection, access.eligibility.scope)
+                    access.activate(client, journal, args.poll_timeout, reporter)
+                except JournalError:
+                    raise
+                except (SafetyError, OSError) as error:
+                    pim_failed += 1
+                    journal.append("pim_activation_failure", activationRequestId=access.request_id, error=str(error))
+                    reporter.emit("STOP: PIM activation failed; no assignments deleted: " + str(error))
+                    break
             for index, record in enumerate(actionable, 1):
+                if pim_failed:
+                    break
                 intent_written = False
                 try:
                     current = refresh_record(client, record, inventory, filters)
@@ -1170,14 +1507,40 @@ def execute_delete(client, args, reporter):
                     journal.append(event, key=record.key, error=str(error))
                     reporter.emit("STOP: " + str(error))
                     break
-            journal.append("delete_summary", deleted=deleted, skipped=skipped, failed=failed,
-                           protected=len(blocked), unprocessed=len(actionable) - deleted - skipped - failed)
+        except JournalError:
+            journal_healthy = False
+            raise
         finally:
-            client.allow_writes = False
-    reporter.emit("Result: deleted={}, skipped={}, failed={}, protected={}, unprocessed={}.".format(
-        deleted, skipped, failed, len(blocked), len(actionable) - deleted - skipped - failed))
+            try:
+                if journal_healthy:
+                    for access in reversed(pim_access):
+                        try:
+                            access.cleanup(client, journal, args.poll_timeout, reporter)
+                        except JournalError:
+                            journal_healthy = False
+                            raise
+                        except (SafetyError, OSError) as error:
+                            pim_failed += 1
+                            journal.append("pim_cleanup_failure", activationRequestId=access.request_id, error=str(error))
+                            reporter.emit("MANUAL PIM CLEANUP REQUIRED: {} | request {} | {}".format(
+                                access.eligibility.scope, access.request_id, error))
+                if journal_healthy:
+                    journal.append("delete_summary", deleted=deleted, skipped=skipped, failed=failed, pim_failed=pim_failed,
+                                   protected=len(blocked), unprocessed=len(actionable) - deleted - skipped - failed)
+            except JournalError:
+                journal_healthy = False
+                raise
+            finally:
+                client.allow_writes = False
+                if not journal_healthy:
+                    for access in pim_access:
+                        if access.attempted and not access.rejected:
+                            reporter.emit("Journal failed; verify temporary PIM access manually: {} | request {}".format(
+                                access.eligibility.scope, access.request_id))
+    reporter.emit("Result: deleted={}, skipped={}, failed={}, protected={}, unprocessed={}, pim_failed={}.".format(
+        deleted, skipped, failed, len(blocked), len(actionable) - deleted - skipped - failed, pim_failed))
     reporter.emit("Rollback journal: " + str(path))
-    return 1 if failed or blocked else 0
+    return 1 if failed or blocked or pim_failed else 0
 
 
 def journal_state(rows):
@@ -1187,7 +1550,7 @@ def journal_state(rows):
     selection = scope_from_document(header.get("selection"))
     snapshots, states = {}, {}
     complete = False
-    metadata_events = {"header", "journal_recovery", "canceled", "delete_summary", "rollback_summary"}
+    metadata_events = {"header", "journal_recovery", "canceled", "delete_summary", "rollback_summary"} | PIM_ACCESS_EVENTS
     for row in rows:
         event = row.get("event")
         if event == "snapshot":
@@ -1379,6 +1742,7 @@ def execute_rollback(args, reporter, client=None):
     with RollbackJournal(path) as journal:
         rows = journal.read()
         header, selection, snapshots, states = journal_state(rows)
+        pim_pending = pending_pim_access(rows)
         if header.get("pimCheck") == "operator-asserted-absent":
             reporter.emit("WARNING: The original deletion used --assume-no-pim; its PIM exclusion was not independently verified.")
         if journal.trailing_bytes:
@@ -1388,15 +1752,17 @@ def execute_rollback(args, reporter, client=None):
             raise SafetyError("Rollback tenant/cloud does not match the authenticated context.")
         if args.tenant_id and args.tenant_id.casefold() != client.tenant:
             raise SafetyError("--tenant-id does not match the authenticated context.")
+        pim_unresolved = check_pim_cleanup(client, pim_pending, selection, reporter)
+        live_selection = selection
         if selection.kind == "management-group":
-            selection = resolve_scope(client, ScopeSelection("management-group", selection.root, management_groups={selection.root}))
+            live_selection = resolve_scope(client, ScopeSelection("management-group", selection.root, management_groups={selection.root}))
         candidates = []
         pending = 0
         for key, record in snapshots.items():
             state = states[key]
             if state["deletion"] not in ("deleted", "pending"):
                 continue
-            if not selection.contains(record.scope):
+            if not selection.contains(record.scope) or not live_selection.contains(record.scope):
                 raise SafetyError("A restore target is no longer inside the original scope hierarchy.")
             if state["deletion"] == "pending":
                 if not args.reconcile_pending:
@@ -1421,8 +1787,8 @@ def execute_rollback(args, reporter, client=None):
             candidates.append(record)
         candidates.sort(key=lambda record: (record.route != "eligibility", record.scope.count("/"), record.key))
         reporter.emit("Rollback | Tenant: {} | Mode: {} | Candidates: {} | Unresolved: {}".format(
-            client.tenant, "APPLY" if args.apply else "DRY RUN", len(candidates), pending))
-        counts = {"unresolved": pending}
+            client.tenant, "APPLY" if args.apply else "DRY RUN", len(candidates), pending + pim_unresolved))
+        counts = {"unresolved": pending + pim_unresolved}
         if args.apply and candidates:
             if not confirm_operation(args, "restore", len(candidates), reporter,
                                      "Reconciled pending deletions may have an uncertain original cause." if args.reconcile_pending else ""):
@@ -1516,16 +1882,29 @@ class ScopeSelection:
     include_children: bool = True
     management_groups: set = field(default_factory=set)
     subscriptions: set = field(default_factory=set)
+    subscription_name_contains: tuple = ()
+    subscription_names: dict = field(default_factory=dict)
 
     def contains(self, scope):
         if scope == "/":
             return False
         scope = normalize_scope(scope)
+        if self.subscription_name_contains:
+            if not scope.startswith("/subscriptions/") or scope.split("/")[2] not in self.subscriptions:
+                return False
         if self.kind == "management-group":
             if scope in self.management_groups or scope == self.root:
                 return True
             return any(is_below(scope, "/subscriptions/" + item) for item in self.subscriptions)
         return is_below(scope, self.root) if self.include_children else scope == self.root
+
+    def read_scopes(self):
+        if self.kind == "management-group":
+            groups = [] if self.subscription_name_contains else sorted(self.management_groups)
+            return groups + ["/subscriptions/" + item for item in sorted(self.subscriptions)]
+        if self.subscription_name_contains and not self.subscriptions:
+            return []
+        return [self.root]
 
     def query_scope(self):
         if self.kind == "management-group":
@@ -1557,6 +1936,7 @@ def scope_from_args(args):
         result = ScopeSelection("resource", root, args.include_resource_descendants)
     if args.include_resource_descendants and not args.resource_id:
         raise SafetyError("--include-resource-descendants requires --resource-id.")
+    result.subscription_name_contains = tuple(args.subscription_name_contains or ())
     return result
 
 
@@ -1568,6 +1948,7 @@ class FilterSpec:
     principal_name: tuple = ()
     principal_name_contains: tuple = ()
     principal_email: tuple = ()
+    role_id: tuple = ()
     assignment_kind: tuple = ("regular",)
     expiration: str = "any"
 
@@ -1589,6 +1970,10 @@ def matches_filters(properties, filters, kind="regular", principal=None, end=Non
     if kind not in filters.assignment_kind:
         return False
     if filters.expiration != "any" and (end is not None) != (filters.expiration == "time-bound"):
+        return False
+    if filters.role_id and properties.get("roleDefinitionId", "").rsplit("/", 1)[-1].casefold() not in {
+        value.casefold() for value in filters.role_id
+    }:
         return False
     principal = principal or {}
     original_type = properties.get("principalType", "")
@@ -1642,6 +2027,15 @@ def build_arg_query(selection, filters):
         if selection.include_children:
             clause += " or assignmentScope startswith " + json.dumps(selection.root + "/")
         query.append("| where " + clause)
+    if selection.subscription_name_contains:
+        query.append("| where subscriptionId in~ (" + ", ".join(
+            json.dumps(value) for value in sorted(selection.subscriptions)
+        ) + ")")
+    if filters.role_id:
+        query.append("| where " + " or ".join(
+            "tostring(properties.roleDefinitionId) endswith " + json.dumps("/" + value)
+            for value in filters.role_id
+        ))
     if filters.principal_id:
         query.append("| where tostring(properties.principalId) in~ (" + ", ".join(
             json.dumps(value) for value in filters.principal_id
@@ -1675,18 +2069,23 @@ def build_parser():
     roots.add_argument("--management-group", type=nonempty, help="Management group ID, not display name.")
     roots.add_argument("--subscription", type=guid)
     roots.add_argument("--resource-id", type=nonempty)
+    delete.add_argument("--subscription-name-contains", action="append", type=nonempty,
+                        help="Subscription display-name substring; repeat for OR. Excludes management-group assignments.")
     delete.add_argument("--resource-group", type=nonempty)
     delete.add_argument("--include-resource-descendants", action="store_true")
     for option in ("description-contains", "principal-name", "principal-name-contains", "principal-email"):
         delete.add_argument("--" + option, action="append", type=nonempty, help="Repeat for OR values.")
     delete.add_argument("--principal-id", action="append", type=guid)
     delete.add_argument("--principal-type", action="append", type=principal_type, choices=PRINCIPAL_TYPES)
+    delete.add_argument("--role-id", action="append", type=guid, help="Role definition GUID; repeat for OR.")
     delete.add_argument("--assignment-kind", action="append", choices=KINDS, help="Default: regular only.")
     delete.add_argument("--expiration", choices=("any", "permanent", "time-bound"), default="any")
     delete.add_argument("--source", choices=("arg", "arm"), default="arg")
     delete.add_argument("--read-workers", type=int, default=4, help="Concurrent read-only ARM requests (1-16, default: 4).")
     delete.add_argument("--allow-nonrestorable-pim", action="store_true")
     delete.add_argument("--allow-self-removal", action="store_true")
+    delete.add_argument("--use-pim-for-owner-removal", action="store_true",
+                        help="Temporarily activate the caller's existing subscription Eligible Owner/UAA, then deactivate. Never creates eligibility.")
     delete.add_argument("--assume-no-pim", action="store_true",
                         help="Explicitly assert this scope has no PIM; skips PIM verification. Regular RBAC only.")
     rollback.add_argument("--reconcile-pending", action="store_true")

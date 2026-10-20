@@ -44,6 +44,394 @@ python3 remove-roleassignments.py rollback \
 
 복원 확인 문구는 `RESTORE <건수>`입니다. **삭제 Dry run에서 만든 preview 파일은 복원에 사용할 수 없습니다.**
 
+## Usage 모음
+
+아래는 Azure Cloud Shell **Bash** 기준입니다. 스크립트를 먼저 내려받은 다음 공통 변수의 예시 값을 실제 대상에 맞게 바꿉니다. 계정이나 구독을 자동 전환하지 않으므로 현재 로그인한 테넌트에서 접근 가능한 범위를 지정해야 합니다. `--tenant-id`는 로그인 전환이 아닌 테넌트 확인용입니다.
+
+```bash
+SCRIPT="$HOME/clouddrive/role-assignment-cleanup/remove-roleassignments.py"
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+MANAGEMENT_GROUP_ID="mg-example"
+RESOURCE_GROUP="rg-example"
+RESOURCE_ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/stexample"
+USER_OBJECT_ID="11111111-1111-1111-1111-111111111111"
+OTHER_USER_OBJECT_ID="22222222-2222-2222-2222-222222222222"
+GROUP_OBJECT_ID="33333333-3333-3333-3333-333333333333"
+TENANT_ID="44444444-4444-4444-4444-444444444444"
+KEYWORD="cleanup-ticket-123"
+```
+
+예제 1~18은 Azure 변경 없이 후보를 조회합니다. 예제 19~20 및 아래 Owner 정리 예제에서 `--apply`를 지정한 명령은 실제 변경을 수행하므로 필요한 예제만 개별 실행합니다. Dry run도 Azure 조회 권한이 필요하고 로컬 preview 파일을 생성합니다. PIM이 없는 범위에 대한 명시적 처리 방법은 예제 18에 별도로 설명합니다.
+
+### 1. Management Group 전체 하위의 특정 Description
+
+MG 자체와 자식 MG, 구독, RG, 리소스의 직접 할당을 포함합니다. 해당 MG보다 상위에서 내려온 할당은 제외합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --management-group "$MANAGEMENT_GROUP_ID" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 2. 구독 전체에서 특정 사용자의 할당
+
+`--principal-id`에는 Entra Object ID를 사용합니다. Application/Client ID가 아닙니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --principal-type User \
+  --principal-id "$USER_OBJECT_ID" \
+  --dry-run
+```
+
+### 3. RG 아래에서 두 키워드 중 하나가 포함된 할당
+
+아래 조건은 `선택한 RG 하위 AND (Description에 temporary 포함 OR legacy 포함)`입니다. 두 키워드를 모두 포함해야 한다는 뜻이 아닙니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --description-contains "temporary" \
+  --description-contains "legacy" \
+  --dry-run
+```
+
+### 4. 정확히 한 리소스에 직접 부여된 할당
+
+예를 들어 Storage Account에 직접 부여한 할당만 조회하며, 상위 RG 및 하위 Container 할당은 제외합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --resource-id "$RESOURCE_ID" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 5. 리소스와 모든 하위 리소스의 할당
+
+예제 4에 하위 범위 포함 옵션을 명시적으로 추가한 경우입니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --resource-id "$RESOURCE_ID" \
+  --include-resource-descendants \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 6. 이메일 또는 Guest UPN으로 사용자 선택
+
+첫 명령은 `mail` 또는 UPN이 지정 이메일과 정확히 일치하는 사용자를 선택합니다. 두 번째 명령은 Guest UPN 예제이며, `#EXT#`를 포함한 값을 따옴표로 감쌉니다. 두 명령은 서로 다른 예제입니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type User \
+  --principal-email "user@example.com" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type User \
+  --principal-email "guest_example.com#EXT#@tenant.onmicrosoft.com" \
+  --dry-run
+```
+
+### 7. 사용자 이름 정확 일치 또는 부분 일치
+
+첫 명령은 표시 이름이 정확히 `Example User`인 사용자, 두 번째 명령은 표시 이름에 `Contractor`가 포함된 사용자를 선택합니다. 동명이인이 있으면 모두 일치하므로 결과의 Object ID를 확인해야 합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type User --principal-name "Example User" \
+  --dry-run
+
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type User --principal-name-contains "Contractor" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 8. 여러 사용자와 Description을 함께 제한
+
+`(사용자 A OR 사용자 B) AND Description 키워드`로 해석합니다. 서로 다른 필터인 이름과 이메일을 함께 지정하면 두 조건을 모두 만족해야 합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type User \
+  --principal-id "$USER_OBJECT_ID" \
+  --principal-id "$OTHER_USER_OBJECT_ID" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 9. 그룹에 직접 부여된 할당
+
+그룹 자체의 RBAC 할당을 선택합니다. 그룹 멤버를 제거하거나 사용자별 간접 권한을 별도 할당으로 펼치지 않습니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type Group \
+  --principal-id "$GROUP_OBJECT_ID" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 10. 일반 Service Principal만 선택
+
+이 CLI의 `ServicePrincipal`은 Managed Identity를 제외합니다. 표시 이름에 `legacy-app`이 포함된 Application/Legacy 서비스 주체만 선택합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type ServicePrincipal \
+  --principal-name-contains "legacy-app" \
+  --dry-run
+```
+
+### 11. 특정 Managed Identity만 선택
+
+System-assigned와 User-assigned MI를 모두 유형으로 인식합니다. 두 하위 유형을 나누는 옵션은 없으므로 특정 MI는 Object ID 또는 이름으로 제한합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type ManagedIdentity \
+  --principal-name "mi-example" \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 12. Service Principal과 Managed Identity를 함께 선택
+
+`User`, `Group`은 제외하고 두 주체 유형만 선택합니다. MI 구분을 위한 Microsoft Graph 읽기 권한이 필요합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-type ServicePrincipal \
+  --principal-type ManagedIdentity \
+  --description-contains "$KEYWORD" \
+  --dry-run
+```
+
+### 13. PIM Eligible의 영구 또는 기간제 할당
+
+첫 명령은 영구 Eligible, 두 번째 명령은 만료 시각이 있는 Eligible만 선택합니다. Eligible에는 실제 Role Assignment Description이 없을 수 있으므로 이 예제는 Object ID로 제한합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --assignment-kind pim-eligible --expiration permanent \
+  --dry-run
+
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --assignment-kind pim-eligible --expiration time-bound \
+  --dry-run
+```
+
+### 14. 관리자가 부여한 기간제 Active 할당
+
+Eligible에서 활성화한 권한과는 다른 `Assigned` 기간제 유형입니다. 복원해도 원래 종료 시각이 연장되지 않습니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --assignment-kind pim-timebound \
+  --dry-run
+```
+
+### 15. 현재 PIM 활성화 할당 확인
+
+자동 원상복구가 불가능할 수 있어 기본적으로 보호된 항목으로 표시됩니다. 아래 명령은 조회만 합니다. 실제 삭제를 의도할 때는 `--allow-nonrestorable-pim`과 `--apply`가 모두 필요하며, 당사자의 재활성화/MFA/승인이 필요한 위험을 먼저 검토해야 합니다. `--yes`는 이 보호를 해제하지 않습니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --assignment-kind pim-activated \
+  --dry-run
+```
+
+### 16. 일반 RBAC와 선택한 PIM 유형을 함께 확인
+
+활성화 유형은 제외한 예제입니다. PIM 유형을 지정하면 기본 `regular`가 자동으로 추가되지 않으므로 포함할 유형을 모두 나열합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --assignment-kind regular \
+  --assignment-kind pim-eligible \
+  --assignment-kind pim-timebound \
+  --dry-run
+```
+
+### 17. 최신 ARM 조회, 상세 출력 및 테넌트 확인
+
+ARG 색인 지연을 피해야 할 때 `--source arm`을 사용합니다. `--read-workers`는 읽기 병렬도이며 쓰기를 병렬화하지 않습니다. 기본 ARG 조회에서 생성 KQL을 보려면 `--source arg --verbose`를 사용합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --description-contains "$KEYWORD" \
+  --tenant-id "$TENANT_ID" \
+  --source arm --read-workers 8 --timeout 90 \
+  --verbose --dry-run
+```
+
+### 18. PIM이 없음을 별도로 확인한 범위
+
+라이선스 오류만 보고 이 옵션을 추가하면 안 됩니다. 운영자가 해당 범위에 PIM이 없음을 별도로 확인했을 때만 사용합니다. 이 모드에서는 PIM 제외 여부를 API로 검증하지 않으며, 해당 사실이 경고와 저널에 기록됩니다. PIM 유형 옵션과 함께 사용할 수 없습니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --description-contains "$KEYWORD" \
+  --assignment-kind regular --assume-no-pim \
+  --dry-run
+```
+
+### 19. 검토 후 실제 삭제 또는 자동화 실행
+
+먼저 같은 범위·조건으로 Dry run을 검토합니다. 아래의 두 실행 방식 중 **하나만** 선택합니다. 첫 명령은 `DELETE <건수>` 입력을 요구하고, 두 번째 명령은 이미 별도 승인을 받은 자동화용입니다. 동일한 롤백 파일은 덮어쓰지 않습니다. 새 실행에는 새 파일명을 사용합니다.
+
+영구 저장소가 마운트된 `~/clouddrive`에 기록합니다. 단순히 같은 이름의 디렉터리를 만드는 것으로 영구 저장소 연결을 대신할 수 없습니다. 삭제 후 복구할 별도 운영자의 권한을 유지해야 합니다.
+
+```bash
+ROLLBACK_FILE="$HOME/clouddrive/rbac-cleanup-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}.jsonl"
+
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --description-contains "$KEYWORD" \
+  --rollback-file "$ROLLBACK_FILE" \
+  --apply
+```
+
+```bash
+ROLLBACK_FILE="$HOME/clouddrive/rbac-cleanup-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}.jsonl"
+
+python3 "$SCRIPT" delete \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --principal-id "$USER_OBJECT_ID" \
+  --description-contains "$KEYWORD" \
+  --rollback-file "$ROLLBACK_FILE" \
+  --apply --yes
+```
+
+현재 로그인한 사용자 자신의 할당은 이 명령에서도 기본 보호됩니다. `--allow-self-removal`은 독립적인 복구 수단을 확보한 뒤 의도적으로 자기 할당을 제거할 때만 사용합니다. `--yes`는 자기 권한, PIM 복원 제약 및 백업 안전 검사를 우회하지 않습니다.
+
+### 20. 복원 미리보기, 실제 복원 및 중단된 실행 복구
+
+`ROLLBACK_FILE`은 예제 19에서 실제 삭제할 때 생성한 파일 경로입니다. 다른 세션에서는 그 실제 경로로 변수를 다시 지정해야 합니다. preview 파일이 아닙니다.
+
+```bash
+python3 "$SCRIPT" rollback \
+  --rollback-file "$ROLLBACK_FILE" \
+  --dry-run
+```
+
+복원 대상을 검토한 뒤 실제 복원을 실행합니다. `RESTORE <건수>` 확인을 요청합니다.
+
+```bash
+python3 "$SCRIPT" rollback \
+  --rollback-file "$ROLLBACK_FILE" \
+  --apply
+```
+
+네트워크 오류나 강제 종료 후 불확정 항목이 있으면 다음 명령으로 재확인합니다. 이는 확인용 예제이며, 실제 복원은 결과와 삭제 원인을 검토한 뒤 별도로 승인해야 합니다. '지금 없음'만으로 이 스크립트가 삭제했다는 사실이 증명되지는 않습니다.
+
+```bash
+python3 "$SCRIPT" rollback \
+  --rollback-file "$ROLLBACK_FILE" \
+  --reconcile-pending --dry-run
+```
+
+### 조건 작성 시 주의
+
+- `--description-contains "*temporary*"`의 `*`는 와일드카드가 아니라 문자 자체입니다. 부분 일치는 `--description-contains "temporary"`로 지정합니다.
+- 같은 키워드 옵션을 반복하면 OR입니다. Description에 두 키워드가 모두 있어야 하는 AND 조건이나 정규식 조건은 현재 제공하지 않습니다.
+- 범위 root는 한 번에 하나만 지정합니다. 여러 구독을 처리할 때는 각각 별도로 Dry run하고 실행별로 다른 롤백 파일을 사용합니다.
+- `--expiration time-bound`만 지정하면 기본 유형이 `regular`라 원하는 기간제 PIM 목록을 찾지 못합니다. `--assignment-kind pim-timebound` 또는 `pim-eligible`을 함께 지정합니다.
+- `--role-id`에는 Role Assignment ID가 아닌 역할 정의 GUID를 사용합니다. `--role-name`, `--query`, `--kql-file`은 현재 지원하지 않습니다.
+- `-dev-`처럼 `-`로 시작하는 필터 값은 `--subscription-name-contains=-dev-`처럼 `=`로 연결합니다.
+- 위 예제의 옵션과 조합은 로컬 CLI 파서로 검증합니다. PIM 실제 처리, MG 계층 및 Cloud Shell 실행의 실환경 검증 한계는 아래 검증 기록을 참고합니다.
+
+## dev/stg 구독의 Owner만 정리
+
+다음은 선택한 MG 하위에서 구독 Display Name에 **`-dev-` 또는 `-stg-`가 포함된 구독**만 대상으로, 기본 제공 **Owner** 역할의 일반 영구 Active 할당을 선택하는 예제입니다. 대소문자를 구분하지 않습니다. MG 자체와 자식 MG에 직접 부여한 할당, 상위 MG에서 상속된 할당 및 다른 이름의 구독은 제외합니다. 일치 구독의 RG·리소스에 직접 부여한 Owner도 범위에 포함됩니다.
+
+Owner 역할 정의 GUID는 `8e3af657-a8ff-443c-a75c-2fe8c4bcb635`입니다. 주체 조건을 추가하지 않으면 사용자뿐 아니라 그룹·서비스 주체 등 모든 주체의 일치 Owner 할당을 선택하되, 실행자 본인 할당은 기본 보호합니다.
+
+먼저 아래 명령으로 조회합니다. `MANAGEMENT_GROUP_ID`는 위 공통 변수의 값을 실제 MG ID로 바꿔 사용합니다.
+
+```bash
+python3 "$SCRIPT" delete \
+  --management-group "$MANAGEMENT_GROUP_ID" \
+  --subscription-name-contains=-dev- \
+  --subscription-name-contains=-stg- \
+  --role-id "8e3af657-a8ff-443c-a75c-2fe8c4bcb635" \
+  --assignment-kind regular \
+  --use-pim-for-owner-removal \
+  --source arm \
+  --dry-run
+```
+
+`--use-pim-for-owner-removal`은 **삭제 대상 Owner를 Eligible로 변환하지 않습니다.** 실행자에게 각 대상 구독에 이미 직접 부여된 Eligible Owner 또는 User Access Administrator를 임시 활성화하는 옵션입니다. 새 Eligible/영구 권한은 만들지 않으며, 권한이 없으면 삭제 전에 중단합니다. 자세한 전제와 정리 방법은 아래 PIM 절을 확인합니다.
+
+Dry run의 구독 ID·표시 이름, 삭제 목록, 보호 목록 및 PIM 활성화 계획을 검토하고, 독립적인 복구 운영자를 확보한 뒤 실제 실행합니다.
+
+```bash
+ROLLBACK_FILE="$HOME/clouddrive/rbac-owner-devstg-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}.jsonl"
+
+python3 "$SCRIPT" delete \
+  --management-group "$MANAGEMENT_GROUP_ID" \
+  --subscription-name-contains=-dev- \
+  --subscription-name-contains=-stg- \
+  --role-id "8e3af657-a8ff-443c-a75c-2fe8c4bcb635" \
+  --assignment-kind regular \
+  --use-pim-for-owner-removal \
+  --source arm \
+  --rollback-file "$ROLLBACK_FILE" \
+  --apply
+```
+
+`DELETE <건수>` 확인을 요구합니다. 승인된 자동화에서만 `--yes`를 추가합니다. 본인 Owner까지 의도적으로 제거하려면 `--allow-self-removal`이 별도로 필요합니다. 이 경우에도 활성화에 사용하는 원본 Eligible/동일 scope의 동일 실행자 역할은 삭제 집합에 포함될 수 없습니다.
+
+특정 사용자의 Owner만 제거하려면 두 명령에 동일한 `--principal-id "$USER_OBJECT_ID"` 조건을 추가합니다. Eligible·기간제·활성화 Owner까지 선택하려면 원하는 `--assignment-kind`를 명시해야 하며, 기존 PIM 보호 및 복원 제약도 그대로 적용됩니다.
+
 ## 범위 지정
 
 범위 root는 필수이며 다음 중 하나를 선택합니다. 범위를 생략해 테넌트 전체로 확장하지 않습니다.
@@ -60,12 +448,24 @@ python3 remove-roleassignments.py rollback \
 
 MG 조회가 ARG의 10,000개 구독 한도를 초과하면 부분 목록으로 삭제하지 않고 중단합니다. 더 작은 명시적 범위로 실행해야 합니다.
 
+### 구독 표시 이름 필터
+
+`--subscription-name-contains TEXT`를 반복하면 값들은 OR로 해석합니다. 다른 범위·역할·주체 조건과는 AND입니다. 구독의 ARM `displayName`을 조회하며, 사용자/그룹의 `displayName`이나 구독 ID를 이름으로 간주하지 않습니다.
+
+- `--management-group`과 함께 쓰면 실제 하위 구독 중 일치하는 구독만 포함하고 **모든 MG scope의 할당을 제외**합니다. MG 할당을 삭제하면 일치하지 않는 구독에도 영향을 줄 수 있기 때문입니다.
+- `--subscription`, `--resource-group`, `--resource-id`에서도 해당 구독 이름을 추가로 검사하며, 기존 RG/리소스 경계는 유지합니다.
+- 이름 조회 실패·누락·테넌트 불일치는 조건을 무시하지 않고 중단합니다. 일치 구독이 없으면 RBAC/PIM 인벤토리 조회나 Azure 변경 없이 종료합니다.
+- 실제 실행 전에는 범위·구독 이름을 다시 확인하고, 각 삭제와 임시 PIM 활성화 전에도 이름을 확인합니다. 확인한 이름이 바뀌면 중단합니다. 이미 만든 임시 PIM 권한의 정리는 이름 변경 여부와 관계없이 원래 구독 ID에서 수행합니다.
+- 롤백은 기록된 구독 ID와 원래 삭제 목록을 사용합니다. 삭제 후 이름이 바뀌어도 원래 권한을 복원할 수 있으며, 다른 구독으로 복원 대상을 확장하지 않습니다.
+
 ## 조건
 
 서로 다른 조건은 **AND**, 같은 옵션을 여러 번 지정하면 그 값들은 **OR**입니다. 빈 문자열은 허용하지 않습니다. ID, 이름, 이메일 및 키워드는 대소문자를 구분하지 않습니다.
 
 | 옵션 | 비교 |
 | --- | --- |
+| `--subscription-name-contains TEXT` | 선택 범위 안의 구독 Display Name 부분 일치. 반복하면 OR |
+| `--role-id GUID` | 역할 정의 GUID 일치. 반복하면 OR. 기본 제공 Owner는 `8e3af657-a8ff-443c-a75c-2fe8c4bcb635` |
 | `--description-contains TEXT` | Role Assignment의 실제 Description 부분 일치 |
 | `--principal-id OBJECT_ID` | 할당 대상의 Entra Object ID. Application/Client ID가 아님 |
 | `--principal-type TYPE` | `User`, `Group`, `ServicePrincipal`, `ManagedIdentity`, `ForeignGroup`, `Device`, `AgentUser`, `AgentServicePrincipal` |
@@ -125,6 +525,20 @@ python3 remove-roleassignments.py delete \
 - Eligible에 연결된 활성화가 삭제 대상으로 확인되지 않았으면 Eligible 삭제를 차단합니다. 필터 밖의 활성화를 자동 삭제하지 않습니다. 연결된 활성화를 먼저 제거하고 Eligible을 제거하며, 복원 시에는 Eligible이 먼저입니다.
 - 원래 PIM 스케줄 ID, 생성자, 생성 시각, 승인·활성화 이력은 복원되지 않습니다. `201 Created`만으로 완료라 판단하지 않고 요청 상태와 실제 리소스를 재조회합니다.
 
+### 마지막 구독 Owner 삭제를 위한 임시 활성화
+
+`--use-pim-for-owner-removal`은 삭제 가능한 **구독 scope의 기본 제공 Owner**가 있을 때 실행자의 기존 PIM 권한을 사용합니다. RG/리소스/MG의 Owner에 대해 별도의 구독 활성화를 자동 생성하는 기능은 아닙니다.
+
+1. 최초 조회·백업에 필요한 기존 읽기 권한과, 각 대상 구독에 실행자 **사용자 본인에게 직접** 부여된 유효한 Eligible Owner 또는 User Access Administrator가 필요합니다. 조건부, 그룹/상속 경유 및 미래 시작 Eligible은 자동 활성화하지 않습니다. 사용 가능한 후보 중 기존 활성화를 먼저 재사용하고, 새 활성화가 필요하면 User Access Administrator를 우선합니다.
+2. Dry run에서는 계획과 원본 Eligible ID만 확인합니다. 실제 실행은 완전한 백업과 사용자 확인을 마친 뒤 `SelfActivate`를 요청하며, PIM 스케줄·인스턴스·실제 backing RBAC가 일치하는지 확인한 후 삭제합니다.
+3. 새 활성화의 절대 종료 시각은 요청 시점부터 최대 1시간이며, 원본 Eligible 종료 시각을 넘지 않습니다. 해당 활성화를 허용하는 PIM 정책이 필요합니다. MFA·인증 컨텍스트·승인·정책을 우회하지 않습니다. 승인 대기/실패/불확정 요청에서는 삭제하지 않고 취소 또는 정리를 시도합니다.
+4. 작업 성공·실패 시 이 실행이 만든 활성화만 `SelfDeactivate`로 해제하고 실제 삭제를 재조회합니다. Azure PIM은 활성화 후 5분 이내 해제를 허용하지 않으므로 정리에 최대 약 5분이 추가될 수 있습니다. 시작 전부터 활성화되어 있던 권한은 해제하지 않습니다.
+5. 원본 Eligible 또는 그와 동일한 구독·실행자·역할을 삭제 대상으로 선택하면 해당 후보를 작업용 권한으로 사용할 수 없습니다. `--allow-self-removal`도 이 제한을 해제하지 않습니다. `--assume-no-pim`과 함께 사용할 수 없습니다.
+6. PIM 활성화·취소·해제에도 API 호출 전 저널 intent를 동기 기록합니다. 정리 실패는 종료 코드 1과 `MANUAL PIM CLEANUP REQUIRED`로 알리며 요청 ID를 남깁니다. 프로세스 강제 종료 또는 저널 기록 실패 시에는 추가 미기록 변경을 시도하지 않으므로 PIM **My requests**에서 취소하거나 **My roles**에서 비활성화하고 확인해야 합니다. 새 요청에는 최대 1시간의 종료 시각이 설정됩니다.
+7. 롤백은 임시 PIM 권한을 새로 만들거나 복원하지 않습니다. 미완료 정리 기록이 있으면 실제 상태를 읽어 남아 있는 권한/요청을 알리고, 수동 정리 후 재실행하면 해제를 확인합니다. 삭제 대상의 원래 권한 복원에 필요한 작업 권한은 별도로 활성화해야 할 수 있습니다.
+
+이 옵션은 Azure의 마지막 관리자 보호나 권한 검사를 무시하는 강제 삭제 옵션이 아닙니다. 새 Eligible을 부여하거나 기존 Owner를 Eligible로 자동 변환하지 않습니다. 운영 환경에서는 격리된 테스트 구독에서 PIM 정책·전파·해제를 먼저 확인해야 합니다.
+
 ## 조회 및 진행 표시
 
 기본 `--source arg`는 자동 생성한 `AuthorizationResources` KQL과 REST API를 사용합니다. 직접 KQL 문자열/파일 입력은 제공하지 않습니다. ID 정렬, continuation token, 중복 및 잘림 검사를 수행하고 전체 목록을 수집한 후에만 삭제합니다.
@@ -181,7 +595,9 @@ python3 remove-roleassignments.py --help
 python3 -B -m unittest discover -s tests -p test_remove_roleassignments.py -v
 ```
 
-주요 검증은 범위 경계, 1,001건 페이지 조회, 조건 조합, MI 구분, PIM 기본 제외, Dry run의 쓰기 0건, 백업 실패/중단, 충돌, 만료 보존, PIM API 경로, 삭제 후 복원 및 재실행입니다. 운영 적용 전에는 격리된 테스트 범위에서 PIM 하위 범위 조회의 완전성, 정책과 권한, Cloud Shell 저장소를 함께 확인해야 합니다.
+주요 검증은 범위 경계, 1,001건 페이지 조회, 조건 조합, MI 구분, PIM 기본 제외, Dry run의 쓰기 0건, 백업 실패/중단, 충돌, 만료 보존, PIM API 경로, 삭제 후 복원 및 재실행입니다. 구독 이름 OR/대소문자·RG 경계·MG 제외·이름 변경·역할 GUID 필터, PIM 임시 활성화/기존 활성화 재사용/최소 유지 시간/승인 취소/부분 프로비저닝/불확정 응답/실패 시 정리 및 수동 정리 후 확인도 모의 테스트로 검증합니다. 운영 적용 전에는 격리된 테스트 범위에서 PIM 하위 범위 조회의 완전성, 정책과 권한, Cloud Shell 저장소를 함께 확인해야 합니다.
+
+2026-10-20 추가한 구독 이름 필터와 임시 PIM Owner 삭제 옵션은 모의 API로 검증했으며 실제 Azure 권한은 변경하지 않았습니다. 아래의 이전 실계정 검증 기록은 새 PIM 활성화/해제 기능의 실환경 검증 결과가 아닙니다.
 
 ### 실계정 검증 기록 (2026-09-28)
 
@@ -211,6 +627,10 @@ python3 -B -m unittest discover -s tests -p test_remove_roleassignments.py -v
 - [Resource Graph REST API](https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources)
 - [ARG 범위 옵션](https://learn.microsoft.com/en-us/azure/governance/resource-graph/concepts/query-language#query-scope)
 - [RBAC 생성/복원 필드](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignments/create?view=rest-authorization-2022-04-01)
+- [구독 Display Name 조회](https://learn.microsoft.com/en-us/rest/api/resources/subscriptions/get?view=rest-resources-2022-12-01)
+- [마지막 Owner 삭제 제한 및 PIM 사용 경로](https://learn.microsoft.com/en-us/azure/role-based-access-control/troubleshooting#symptom---cannot-delete-the-last-owner-role-assignment)
+- [PIM 활성화·취소·5분 최소 유지](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-resource-roles-activate-your-roles)
+- [대기 중인 PIM 요청 취소 API](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignment-schedule-requests/cancel?view=rest-authorization-2020-10-01)
 - [PIM 인스턴스와 원본 할당 연결](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignment-schedule-instances/list-for-scope?view=rest-authorization-2020-10-01)
 - [PIM 활성 할당 요청](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignment-schedule-requests/create?view=rest-authorization-2020-10-01)
 - [PIM Eligible 할당 요청](https://learn.microsoft.com/en-us/rest/api/authorization/role-eligibility-schedule-requests/create?view=rest-authorization-2020-10-01)
