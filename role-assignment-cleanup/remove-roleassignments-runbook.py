@@ -96,16 +96,29 @@ def iso_time(value=None):
     return (value or utc_now()).isoformat().replace("+00:00", "Z")
 
 
-def parse_time(value):
+def parse_time(value, context="timestamp"):
     if value is None:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            raise ValueError("Missing timezone")
+        match = re.fullmatch(
+            r"([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt ]((?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9])"
+            r"(?:\.([0-9]+))?([Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
+            value if isinstance(value, str) else "",
+        )
+        if match is None:
+            raise ValueError("Expected a timezone-aware ISO timestamp")
+        day, clock, fraction, offset = match.groups()
+        # Python 3.9/3.10 require 3 or 6 fractional digits; Azure can return other precisions.
+        fraction = "." + fraction[:6].ljust(6, "0") if fraction else ""
+        offset = "+00:00" if offset.upper() == "Z" else offset
+        parsed = datetime.fromisoformat(day + "T" + clock + fraction + offset)
         return parsed.astimezone(timezone.utc)
-    except (ValueError, TypeError, AttributeError) as error:
-        raise SafetyError("Invalid timestamp in Azure response or journal.") from error
+    except (ValueError, OverflowError):
+        raise SafetyError(
+            "Invalid timestamp for {} in Azure response or journal. "
+            "Expected ISO 8601 YYYY-MM-DDTHH:MM:SS[.fraction] with Z or +/-HH:MM timezone; "
+            "received {}. No timestamp value was logged.".format(context, type(value).__name__)
+        ) from None
 
 
 def cli_json(*arguments, timeout=60):
@@ -587,7 +600,9 @@ class AssignmentRecord:
     def end(self):
         if self.route == "rbac":
             return None
-        values = [parse_time(item.get("properties", {}).get("endDateTime")) for item in [self.raw, *self.instances]]
+        values = [parse_time(item.get("properties", {}).get("endDateTime"),
+                             "{} properties.endDateTime".format(item.get("id", self.identifier)))
+                  for item in [self.raw, *self.instances]]
         return min((value for value in values if value is not None), default=None)
 
     def restore_limitations(self):
@@ -646,7 +661,7 @@ def pim_restore_body(record, now=None):
     now = now or utc_now()
     if record.route == "rbac" or record.kind == "pim-activated":
         raise SafetyError("This assignment does not support automatic PIM restoration.")
-    start = parse_time(record.properties.get("startDateTime")) or now
+    start = parse_time(record.properties.get("startDateTime"), record.identifier + " properties.startDateTime") or now
     start = max(start, now)
     end = record.end
     if end and (end - start).total_seconds() < 300:
@@ -1012,7 +1027,7 @@ def same_assignment(left, right):
 
 def pim_kind(raw, route, now=None):
     properties = raw["properties"]
-    end = parse_time(properties.get("endDateTime"))
+    end = parse_time(properties.get("endDateTime"), raw["id"] + " properties.endDateTime")
     now = now or utc_now()
     if properties.get("status") in PIM_TERMINAL or (end is not None and end <= now):
         return None
@@ -1368,7 +1383,7 @@ def removal_observed(client, record):
     if current is not None:
         validate_assignment(current, collection_for_route(record.route))
         properties = current["properties"]
-        expired = parse_time(properties.get("endDateTime"))
+        expired = parse_time(properties.get("endDateTime"), current["id"] + " properties.endDateTime")
         if properties.get("status") not in ("Revoked", "Canceled") and not (expired and expired <= utc_now()):
             return False
     origins = {record.rbac["id"]} if record.rbac else set()
@@ -1635,7 +1650,8 @@ def plan_pim_owner_access(client, inventory, actionable, reporter):
                 continue
             if pim_kind(raw, "eligibility") is None:
                 continue
-            start, end = parse_time(properties.get("startDateTime")), parse_time(properties.get("endDateTime"))
+            start = parse_time(properties.get("startDateTime"), raw["id"] + " properties.startDateTime")
+            end = parse_time(properties.get("endDateTime"), raw["id"] + " properties.endDateTime")
             if (start and start > utc_now()) or (end and (end - utc_now()).total_seconds() < 300):
                 continue
             eligibility = inventory.from_schedule(raw, "eligibility")
@@ -2055,10 +2071,10 @@ def equivalent_pim(record, current):
     for name in ("condition", "conditionVersion"):
         if canonical_properties(record.properties)[name] != canonical_properties(current["properties"])[name]:
             return False
-    if parse_time(current["properties"].get("endDateTime")) != record.end:
+    if parse_time(current["properties"].get("endDateTime"), current["id"] + " properties.endDateTime") != record.end:
         return False
-    original_start = parse_time(record.properties.get("startDateTime"))
-    current_start = parse_time(current["properties"].get("startDateTime"))
+    original_start = parse_time(record.properties.get("startDateTime"), record.identifier + " properties.startDateTime")
+    current_start = parse_time(current["properties"].get("startDateTime"), current["id"] + " properties.startDateTime")
     if original_start is not None:
         if current_start is None or current_start < original_start:
             return False
@@ -2154,7 +2170,8 @@ def restore_record(client, record, state, args, reporter, journal):
         return "manual_required"
     body = None
     if record.route != "rbac":
-        if record.end and (record.end - max(parse_time(record.properties.get("startDateTime")) or utc_now(), utc_now())).total_seconds() < 300:
+        start = parse_time(record.properties.get("startDateTime"), record.identifier + " properties.startDateTime")
+        if record.end and (record.end - max(start or utc_now(), utc_now())).total_seconds() < 300:
             reporter.emit("EXPIRED: Original PIM lifetime cannot be restored: " + record.identifier)
             return "expired"
         body = pim_restore_body(record)
@@ -2616,7 +2633,7 @@ def main(argv=None):
 
 
 
-AUTOMATION_CORE_SHA256 = 'c07dc176c0a42df3c73ca1dbe7712fb98e665602177bbd4455e2cd8d7ef82563'
+AUTOMATION_CORE_SHA256 = '303b37524af61665882216c46731762313d5e617b66557a7f1baf0a1b1a81cff'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
@@ -2918,6 +2935,7 @@ def automation_main(argv=None):
             print("Using Runbook default arguments: KT_GPU | User | regular | ARG | DRY RUN.", flush=True)
         client = AutomationRestClient(tenant, args.timeout, Reporter(args.verbose))
         client.reporter.emit("Automation cleanup core: " + AUTOMATION_CORE_SHA256)
+        client.reporter.emit("Python runtime: " + sys.version.split()[0])
         if args.command == "rollback":
             automation_download_journal(os.environ[internal_sas], output, args.timeout)
             client.reporter.emit("Rollback input downloaded from Blob." + (
