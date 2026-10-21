@@ -53,7 +53,8 @@ PIM_ACCESS_EVENTS = {
 }
 PREVIEW_COLUMNS = ("principal_id", "display_name", "email")
 DELETED_USER_COLUMNS = (
-    "principal_id", "display_name", "user_principal_name", "email", "deleted_role_assignments", "directory_status",
+    "principal_id", "display_name", "user_principal_name", "email", "deleted_role_assignments",
+    "deleted_role_details", "directory_status",
 )
 
 
@@ -376,6 +377,15 @@ def resolve_role_definitions(client, properties_list, reporter):
     return definitions
 
 
+def resolve_assignment_role_details(client, records, reporter):
+    missing = [record for record in records if not record.role_name or not record.role_type]
+    definitions = resolve_role_definitions(client, [record.properties for record in missing], reporter)
+    for record in missing:
+        role = definitions[record.properties["roleDefinitionId"].casefold()]["properties"]
+        record.role_name = role["roleName"]
+        record.role_type = role["type"]
+
+
 def get_live_role_definition(client, identifier):
     role_definition_guid(identifier)
     raw = client.request("GET", api_path(identifier, RBAC_API))
@@ -615,6 +625,8 @@ class AssignmentRecord:
     instances: list = field(default_factory=list)
     principal: dict = field(default_factory=dict)
     projection: dict = field(default_factory=dict)
+    role_name: str = ""
+    role_type: str = ""
 
     @property
     def identifier(self):
@@ -677,10 +689,12 @@ class AssignmentRecord:
     @classmethod
     def from_snapshot(cls, value):
         try:
-            record = cls(**{key: value[key] for key in cls.__dataclass_fields__})
+            record = cls(**{key: value[key] for key in cls.__dataclass_fields__ if key in value})
             validate_assignment(record.raw, collection_for_route(record.route))
             if record.kind not in KINDS:
                 raise SafetyError("Unknown assignment kind in journal.")
+            if not isinstance(record.role_name, str) or not isinstance(record.role_type, str):
+                raise SafetyError("Invalid role-definition metadata in journal.")
             if record.route == "rbac" and record.kind != "regular":
                 raise SafetyError("A PIM assignment cannot be restored using the RBAC route.")
             if record.rbac:
@@ -1147,7 +1161,7 @@ def write_preview_csv(path, records, reporter):
 
 
 def write_deleted_users_csv(journal_path, path):
-    snapshots, users, intents, successful = {}, {}, set(), set()
+    snapshots, role_details, users, intents, successful = {}, {}, {}, set(), set()
     complete = False
     try:
         with journal_path.open("rb") as stream:
@@ -1172,6 +1186,15 @@ def write_deleted_users_csv(journal_path, path):
                         "email": principal.get("mail") or principal.get("userPrincipalName") or "",
                         "directory_status": principal.get("directoryStatus", "not_requested"),
                         "deleted_role_assignments": 0,
+                        "deleted_role_details": [],
+                    }
+                    role_details[key] = None if snapshots[key] is None else {
+                        "role_name": record.role_name,
+                        "role_type": record.role_type,
+                        "role_definition_id": record.properties["roleDefinitionId"],
+                        "scope": record.properties["scope"],
+                        "kind": record.kind,
+                        "assignment_id": record.identifier,
                     }
                 elif event == "plan_complete":
                     if complete or row.get("count") != len(snapshots):
@@ -1189,11 +1212,25 @@ def write_deleted_users_csv(journal_path, path):
                     if user is not None:
                         saved = users.setdefault(user["principal_id"], user)
                         saved["deleted_role_assignments"] += 1
+                        role = role_details[key]
+                        role_name = role["role_name"] or "[Role name not recorded]"
+                        role_type = role["role_type"] or "unknown"
+                        saved["deleted_role_details"].append(
+                            "Role: {} | Type: {} | Role definition ID: {} | Scope: {} | Kind: {} | Assignment ID: {}".format(
+                                role_name, role_type, role["role_definition_id"], role["scope"],
+                                role["kind"], role["assignment_id"],
+                            )
+                        )
         if not complete:
             raise ValueError("No complete backup plan")
     except (OSError, ValueError, UnicodeError, SafetyError) as error:
         raise SafetyError("Cannot build deleted-user CSV from an incomplete/invalid apply journal: " + str(journal_path)) from error
-    write_csv_report(path, DELETED_USER_COLUMNS, (users[key] for key in sorted(users)))
+    rows = []
+    for key in sorted(users):
+        user = dict(users[key])
+        user["deleted_role_details"] = "\n".join(user["deleted_role_details"])
+        rows.append(user)
+    write_csv_report(path, DELETED_USER_COLUMNS, rows)
     return len(users), sum(row["deleted_role_assignments"] for row in users.values())
 
 
@@ -1479,10 +1516,14 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
     )]
     if filters.exclude_custom_role_name_prefix:
         definitions = resolve_role_definitions(client, [record.properties for record in matched], reporter)
-        matched = [record for record in matched if matches_filters(
-            record.properties, filters, record.kind, record.principal, record.end,
-            definitions[record.properties["roleDefinitionId"].casefold()],
-        )]
+        retained = []
+        for record in matched:
+            definition = definitions[record.properties["roleDefinitionId"].casefold()]
+            if matches_filters(record.properties, filters, record.kind, record.principal, record.end, definition):
+                record.role_name = definition["properties"]["roleName"]
+                record.role_type = definition["properties"]["type"]
+                retained.append(record)
+        matched = retained
     reporter.emit("Matched: {}. Excluded by kind/filters: {}.".format(len(matched), len(records) - len(matched)))
     return matched, inventory
 
@@ -2069,6 +2110,9 @@ def execute_delete(client, args, reporter):
             blocked[record.key] = "Linked activation is outside the confirmed removable set; eligibility removal blocked."
     actionable = [record for record in records if record.key not in blocked]
     actionable.sort(key=lambda record: (record.route == "eligibility", -record.scope.count("/"), record.key))
+    if args.apply and args.include_user_details:
+        users = [record for record in actionable if record.properties.get("principalType") == "User"]
+        resolve_assignment_role_details(client, users, reporter)
     pim_access = plan_pim_owner_access(client, inventory, actionable, reporter) if args.use_pim_for_owner_removal else []
     reporter.emit("Removable: {} | Protected: {}".format(len(actionable), len(blocked)))
     for index, record in enumerate(records):
@@ -2863,7 +2907,7 @@ def main(argv=None):
         return 1
 
 
-AUTOMATION_CORE_SHA256 = 'c41b696ca8d03731e211dce9ffece18d6f97f4a29745d61891d1bf801aada690'
+AUTOMATION_CORE_SHA256 = '31314f5d9ab5a86664378ec6587e992b0a76ae7922957c922a0ec997c301a961'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
@@ -2874,6 +2918,7 @@ AUTOMATION_PARAMETER_TYPES = {
     "tenant_id": str,
     "management_group": str,
     "dry_run": bool,
+    "assume_no_pim": bool,
     "save_output": bool,
     "confirm_apply": str,
     "backup_container_sas_url": str,
@@ -2895,6 +2940,7 @@ def automation_default_configuration():
             "--exclude-custom-role-name-prefix", "(KT", "--description-not-contains", "[SNOW_AUTO]",
             "--assignment-kind", "regular", "--source", "arg", "--dry-run",
         ],
+        "assume_no_pim": False,
         "confirm_apply": None,
         "backup_container_sas_variable": None,
         "backup_container_sas_env": None,
@@ -3193,6 +3239,7 @@ def automation_main(argv=None):
         print("Enter one name=value in each positional parameter, e.g. management_group=KT_GPU and dry_run=true. Order is irrelevant.")
         print("JSON and config-variable input are not supported. Input values are never logged.")
         print("command=delete (default) or command=rollback; dry_run=true (default) or dry_run=false.")
+        print("assume_no_pim=true skips PIM reads only when an operator independently verified no PIM assignments exist in the entire selected scope.")
         print("Apply always requires dry_run=false, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
         print("Container SAS source: backup_container_sas_url, backup_container_sas_variable or backup_container_sas_env (exactly one).")
         print("Set save_output=true to store a result JSON and any preview CSV in the same Blob container; dry-run uploads require this opt-in.")
@@ -3224,6 +3271,8 @@ def automation_main(argv=None):
         if command not in ("delete", "rollback"):
             raise SafetyError("command must be delete or rollback.")
         if command == "rollback":
+            if config.get("assume_no_pim", False):
+                raise SafetyError("assume_no_pim is available for command=delete only.")
             if specified.intersection(("management_group", "read_workers", "delete_workers", "delete_batch_size")):
                 raise SafetyError("Rollback uses its journal scope and serial restoration; management_group and worker overrides are delete-only.")
             arguments = ["rollback", "--dry-run"]
@@ -3238,6 +3287,8 @@ def automation_main(argv=None):
             for name in ("read_workers", "delete_workers", "delete_batch_size"):
                 if name in config:
                     arguments.extend(["--" + name.replace("_", "-"), str(config[name])])
+            if config.get("assume_no_pim", False):
+                arguments.append("--assume-no-pim")
         arguments[arguments.index("--dry-run")] = "--dry-run" if config.get("dry_run", True) else "--apply"
         directory = pathlib.Path(tempfile.mkdtemp(prefix="rbac-automation-"))
         applying = "--apply" in arguments
