@@ -52,6 +52,9 @@ PIM_ACCESS_EVENTS = {
     "pim_activation_reused", "pim_cleanup_intent", "pim_cleanup_success", "pim_cleanup_failure",
 }
 PREVIEW_COLUMNS = ("principal_id", "display_name", "email")
+DELETED_USER_COLUMNS = (
+    "principal_id", "display_name", "user_principal_name", "email", "deleted_role_assignments", "directory_status",
+)
 
 
 class SafetyError(Exception):
@@ -546,6 +549,42 @@ def resolve_principals(client, properties_list, reporter):
     return resolved
 
 
+def resolve_user_details(client, records, reporter):
+    users = [record for record in records if record.properties.get("principalType") == "User"]
+    pending = [record.properties for record in users if not record.principal]
+    try:
+        resolved = resolve_principals(client, pending, reporter) if pending else {}
+    except ApiError as error:
+        reporter.emit("Graph user lookup failed; no deletion attempted." + (
+            " Automation requires Microsoft Graph application User.Read.All with tenant-admin consent."
+            if error.status in (401, 403) else " Resolve the Graph HTTP error before applying."))
+        raise
+    warned = set()
+    for record in users:
+        identifier = record.properties["principalId"].casefold()
+        principal = record.principal or resolved[identifier]
+        error = principal.get("resolutionError")
+        if error == "Graph HTTP 404":
+            principal["directoryStatus"] = "not_found"
+            if identifier not in warned:
+                reporter.emit("WARNING: User {} was not found in Microsoft Graph; CSV will explicitly mark not_found.".format(identifier))
+                warned.add(identifier)
+        elif error:
+            raise SafetyError(
+                "Cannot resolve user {}: {}. {} No deletion attempted.".format(
+                    identifier, error,
+                    "Automation requires Microsoft Graph application User.Read.All with tenant-admin consent; Azure Owner is not sufficient."
+                    if error in ("Graph HTTP 401", "Graph HTTP 403") else "Resolve the directory lookup error before applying.")
+            )
+        else:
+            if (any(principal.get(name) is not None and not isinstance(principal[name], str)
+                    for name in ("displayName", "mail", "userPrincipalName"))
+                    or not any(str(principal.get(name) or "").strip() for name in ("displayName", "userPrincipalName"))):
+                raise SafetyError("Graph returned no usable name/UPN for user {}; refusing a GUID-only success report.".format(identifier))
+            principal["directoryStatus"] = "resolved"
+        record.principal = principal
+
+
 def canonical_properties(properties):
     result = {key: properties.get(key) for key in WRITABLE_PROPERTIES}
     for key in ("principalId", "principalType", "delegatedManagedIdentityResourceId"):
@@ -679,6 +718,51 @@ def pim_restore_body(record, now=None):
     return {"properties": properties}
 
 
+def blob_http_error(error, operation, destination):
+    headers = error.headers or {}
+    code = headers.get("x-ms-error-code")
+    request_id = headers.get("x-ms-request-id")
+    if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,127}", code):
+        code = None
+    if not isinstance(request_id, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", request_id,
+    ):
+        request_id = "Unavailable"
+    read_failed = False
+    try:
+        if code is None:
+            try:
+                content = error.read(8192)
+            except (OSError, http.client.HTTPException, ValueError):
+                read_failed = True
+            else:
+                if isinstance(content, bytes):
+                    match = re.search(rb"<Code>\s*([A-Za-z][A-Za-z0-9]{0,127})\s*</Code>", content)
+                    if match:
+                        code = match[1].decode("ascii")
+                else:
+                    read_failed = True
+    finally:
+        error.close()
+    hints = {
+        "AuthenticationFailed": "Regenerate an unmodified SAS for this account/container; check signature, expiry and start time.",
+        "AuthorizationPermissionMismatch": "Check SAS/stored-policy Write permission for blob creation/append and Read for rollback; a user-delegation SAS also requires its signing identity's Blob data RBAC.",
+        "AuthorizationFailure": "Check Storage public-network, firewall, private-endpoint and Automation worker network rules; SAS does not bypass network restrictions.",
+        "AuthorizationSourceIPMismatch": "Check SAS signed IP (sip) against the actual Automation/Hybrid worker outbound IP.",
+        "KeyBasedAuthenticationNotPermitted": "Shared-key SAS is disabled; use a user-delegation SAS or an administrator-approved storage policy.",
+        "AuthorizationServiceMismatch": "An account SAS must authorize the Blob service (ss includes b).",
+        "AuthorizationResourceTypeMismatch": "An account SAS must authorize object resource types (srt includes o).",
+    }
+    hint = hints.get(code, "Check SAS scope/permissions/expiry, network policy and existing-blob conflicts.")
+    return JournalError(
+        "Blob Storage HTTP {} | code={} | operation={} | request-id={} | target={}. {}{} "
+        "No further role mutations allowed; preserve local files for recovery.".format(
+            error.code, code or "Unavailable", operation, request_id, destination, hint,
+            " Storage error body could not be read." if read_failed else "",
+        )
+    )
+
+
 class BlobJournalBackup:
     def __init__(self, sas_url, timeout=60):
         try:
@@ -735,14 +819,11 @@ class BlobJournalBackup:
                     raise JournalError("Unexpected Blob backup response; local journal retained.")
                 return response.headers, response.read(read_limit) if read_limit else b""
         except urllib.error.HTTPError as error:
-            status = error.code
-            error.close()
-            if allow_missing and status == 404:
+            if allow_missing and error.code == 404:
+                error.close()
                 return None
-            raise JournalError(
-                "Blob backup HTTP {}. Check SAS permissions/expiry, connectivity and blob conflicts. "
-                "Local journal retained; no further mutations allowed.".format(status)
-            ) from None
+            operation = method + (" append" if append else " read" if method == "GET" else " create")
+            raise blob_http_error(error, operation, self.destination) from None
         except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError, SafetyError):
             raise JournalError(
                 "Blob backup failed or its write outcome is uncertain. Local journal retained; "
@@ -792,6 +873,47 @@ class BlobJournalBackup:
                 raise JournalError("Blob append position/checksum could not be verified; no further mutations allowed.")
             self.etag = self.response_etag(headers)
             self.offset += len(payload)
+
+    def verify(self, stream):
+        stream.seek(0, os.SEEK_END)
+        expected_size = stream.tell()
+        if expected_size != self.offset:
+            raise JournalError("Local journal is not fully synchronized to Blob; no role mutations allowed.")
+        stream.seek(0)
+        expected_hash = hashlib.sha256()
+        while True:
+            payload = stream.read(BLOB_APPEND_BYTES)
+            if not payload:
+                break
+            expected_hash.update(payload)
+        try:
+            request = urllib.request.Request(self._url, headers={
+                "x-ms-version": BLOB_API, "If-Match": self.etag, "Accept-Encoding": "identity",
+            }, method="GET")
+            with self.opener.open(request, timeout=self.timeout) as response:
+                if (response.getcode() != 200 or self.response_etag(response.headers) != self.etag
+                        or response.headers.get("Content-Length") != str(expected_size)
+                        or response.headers.get("x-ms-blob-type") != "AppendBlob"):
+                    raise JournalError("Rollback Blob readback headers do not match the uploaded journal.")
+                actual_hash = hashlib.sha256()
+                actual_size = 0
+                while True:
+                    payload = response.read(BLOB_APPEND_BYTES)
+                    if not payload:
+                        break
+                    actual_size += len(payload)
+                    if actual_size > expected_size:
+                        raise JournalError("Rollback Blob readback is longer than the local journal.")
+                    actual_hash.update(payload)
+        except urllib.error.HTTPError as error:
+            raise blob_http_error(error, "GET verify", self.destination) from None
+        except JournalError:
+            raise
+        except (OSError, urllib.error.URLError, http.client.HTTPException, ValueError, SafetyError):
+            raise JournalError("Rollback Blob readback failed; persistence is not verified. Preserve local files; no further role mutations allowed.") from None
+        if actual_size != expected_size or actual_hash.digest() != expected_hash.digest():
+            raise JournalError("Rollback Blob SHA256/length does not match the local journal; no further role mutations allowed.")
+        return actual_hash.hexdigest()
 
 
 def blob_backup_from_args(args, reporter):
@@ -890,15 +1012,26 @@ class RollbackJournal:
                     raise
                 raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
 
-    def enable_blob_backup(self, backup, create=False):
+    def enable_blob_backup(self, backup, create=False, verify=False):
         try:
             backup.initialize(self.file, create=create)
+            if verify:
+                backup.verify(self.file)
         except (JournalError, OSError) as error:
             self.append_ready = False
             if isinstance(error, JournalError):
                 raise
             raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
         self.blob_backup = backup
+
+    def verify_blob_backup(self):
+        if self.blob_backup is None:
+            raise JournalError("A required rollback Blob was not configured.")
+        try:
+            return self.blob_backup.verify(self.file)
+        except (JournalError, OSError):
+            self.append_ready = False
+            raise
 
     def read(self):
         rows = []
@@ -980,30 +1113,88 @@ def csv_text(value):
     return text
 
 
+def write_csv_report(path, columns, rows):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=columns)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({name: csv_text(value) for name, value in row.items()})
+            stream.flush()
+            os.fsync(stream.fileno())
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise SafetyError("Cannot write the CSV report; the file may be incomplete: " + str(path)) from error
+
+
 def write_preview_csv(path, records, reporter):
     principals = {}
     for record in records:
         identifier = record.properties["principalId"].casefold()
         principal = record.principal
+        if not isinstance(principal, dict):
+            raise ValueError("Invalid principal metadata")
         row = principals.setdefault(identifier, dict.fromkeys(PREVIEW_COLUMNS, ""))
         row["principal_id"] = identifier
-        row["display_name"] = row["display_name"] or principal.get("displayName") or ""
+        row["display_name"] = row["display_name"] or principal.get("displayName") or (
+            "[Directory object not found]" if principal.get("directoryStatus") == "not_found" else "")
         row["email"] = row["email"] or principal.get("mail") or principal.get("userPrincipalName") or ""
         if principal.get("resolutionError"):
             reporter.detail("Principal metadata unavailable: {} | {}".format(identifier, principal["resolutionError"]))
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8-sig", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=PREVIEW_COLUMNS)
-            writer.writeheader()
-            for identifier in sorted(principals):
-                writer.writerow({name: csv_text(value) for name, value in principals[identifier].items()})
-            stream.flush()
-            os.fsync(stream.fileno())
-    except (OSError, UnicodeError, csv.Error) as error:
-        raise SafetyError("Cannot write the CSV preview; the file may be incomplete: " + str(path)) from error
+    write_csv_report(path, PREVIEW_COLUMNS, (principals[key] for key in sorted(principals)))
     reporter.emit("CSV preview: {} | Unique matching principals: {}.".format(path, len(principals)))
+
+
+def write_deleted_users_csv(journal_path, path):
+    snapshots, users, intents, successful = {}, {}, set(), set()
+    complete = False
+    try:
+        with journal_path.open("rb") as stream:
+            for sequence, line in enumerate(stream, 1):
+                if not line.endswith(b"\n"):
+                    raise ValueError("Incomplete journal record")
+                row = json.loads(line)
+                if not isinstance(row, dict) or row.get("seq") != sequence:
+                    raise ValueError("Invalid journal sequence")
+                event, key = row.get("event"), row.get("key")
+                if sequence == 1 and (event != "header" or row.get("mode") != "apply" or row.get("schemaVersion") != 1):
+                    raise ValueError("Not an apply journal")
+                if event == "snapshot":
+                    record = AssignmentRecord.from_snapshot(row.get("record", {}))
+                    if complete or key != record.key or key in snapshots:
+                        raise ValueError("Invalid snapshot")
+                    principal = record.principal
+                    snapshots[key] = None if record.properties.get("principalType") != "User" else {
+                        "principal_id": record.properties["principalId"].casefold(),
+                        "display_name": principal.get("displayName") or "",
+                        "user_principal_name": principal.get("userPrincipalName") or "",
+                        "email": principal.get("mail") or principal.get("userPrincipalName") or "",
+                        "directory_status": principal.get("directoryStatus", "not_requested"),
+                        "deleted_role_assignments": 0,
+                    }
+                elif event == "plan_complete":
+                    if complete or row.get("count") != len(snapshots):
+                        raise ValueError("Invalid backup plan")
+                    complete = True
+                elif event == "delete_intent":
+                    if not complete or key not in snapshots or key in intents:
+                        raise ValueError("Invalid deletion intent")
+                    intents.add(key)
+                elif event == "delete_success":
+                    if key not in intents or key in successful:
+                        raise ValueError("Invalid successful deletion")
+                    successful.add(key)
+                    user = snapshots[key]
+                    if user is not None:
+                        saved = users.setdefault(user["principal_id"], user)
+                        saved["deleted_role_assignments"] += 1
+        if not complete:
+            raise ValueError("No complete backup plan")
+    except (OSError, ValueError, UnicodeError, SafetyError) as error:
+        raise SafetyError("Cannot build deleted-user CSV from an incomplete/invalid apply journal: " + str(journal_path)) from error
+    write_csv_report(path, DELETED_USER_COLUMNS, (users[key] for key in sorted(users)))
+    return len(users), sum(row["deleted_role_assignments"] for row in users.values())
 
 
 def reference_id(scope, value, collection):
@@ -1847,6 +2038,8 @@ def execute_batched_deletes(client, records, inventory, filters, args, reporter,
 
 
 def execute_delete(client, args, reporter):
+    args.rollback_blob_verified = False
+    args.rollback_blob_initial_verified = False
     if not 1 <= args.delete_workers <= 32 or not 1 <= args.delete_batch_size <= 500:
         raise SafetyError("--delete-workers must be 1-32 and --delete-batch-size must be 1-500.")
     if args.use_pim_for_owner_removal and args.assume_no_pim:
@@ -1855,9 +2048,13 @@ def execute_delete(client, args, reporter):
     filters = FilterSpec.from_args(args)
     path = journal_path(args)
     blob_backup = blob_backup_from_args(args, reporter)
+    if args.apply and args.require_blob_backup and blob_backup is None:
+        raise JournalError("Blob rollback backup is mandatory; configure --rollback-blob-sas-url-env before applying.")
     reporter.emit("Tenant: {} | Cloud: {} | Mode: {}".format(client.tenant, client.cloud, "APPLY" if args.apply else "DRY RUN"))
     reporter.emit("Scope: " + selection.root)
     records, inventory = discover_records(client, selection, filters, args.source, reporter, args.read_workers, args.assume_no_pim)
+    if args.include_user_details:
+        resolve_user_details(client, records, reporter)
     blocked = {}
     if records and args.apply and not client.actor_id and not args.allow_self_removal:
         raise SafetyError("Caller Object ID is unavailable; cannot enforce self-removal protection.")
@@ -1901,10 +2098,15 @@ def execute_delete(client, args, reporter):
                             for record in records)
         journal.append("plan_complete", count=len(records), actionable=len(actionable))
         reporter.emit("Rollback journal: " + str(journal.path))
-        if not args.apply or not actionable:
-            if args.apply and blob_backup is not None:
+        if not actionable:
+            if blob_backup is not None and args.require_blob_backup:
+                journal.enable_blob_backup(blob_backup, create=True, verify=True)
+                args.rollback_blob_verified = True
+                args.rollback_blob_initial_verified = True
+                reporter.emit("Rollback Blob persisted and verified (no removable assignments): " + blob_backup.destination)
+            elif blob_backup is not None:
                 reporter.emit("Blob upload skipped: no removable assignments; Azure mutations=0.")
-            reporter.emit("{}: matched={}, removable={}, protected={}, Azure mutations=0.".format(
+            reporter.emit("{}: matched={}, removable={}, protected={}, RBAC/PIM mutations=0.".format(
                 "DRY RUN" if not args.apply else "No removable assignments", len(records), len(actionable), len(blocked)))
             return 1 if args.apply and blocked else 0
         if not confirm_operation(args, "delete", len(actionable), reporter,
@@ -1918,8 +2120,10 @@ def execute_delete(client, args, reporter):
             if scope_document(fresh) != scope_document(selection):
                 raise SafetyError("Scope hierarchy or subscription display names changed after discovery.")
         if blob_backup is not None:
-            journal.enable_blob_backup(blob_backup, create=True)
-            reporter.emit("Rollback journal uploaded; subsequent records will be synchronized before mutations.")
+            journal.enable_blob_backup(blob_backup, create=True, verify=args.require_blob_backup)
+            args.rollback_blob_initial_verified = args.require_blob_backup
+            reporter.emit("Rollback Blob {} before mutations: {}".format(
+                "persisted and verified" if args.require_blob_backup else "uploaded", blob_backup.destination))
         client.allow_writes = True
         journal_healthy = True
         try:
@@ -1992,6 +2196,10 @@ def execute_delete(client, args, reporter):
                 if journal_healthy:
                     journal.append("delete_summary", deleted=deleted, skipped=skipped, failed=failed, pim_failed=pim_failed,
                                    protected=len(blocked), unprocessed=len(actionable) - deleted - skipped - failed)
+                    if args.require_blob_backup:
+                        checksum = journal.verify_blob_backup()
+                        args.rollback_blob_verified = True
+                        reporter.emit("Rollback Blob final readback VERIFIED: {} | SHA256={}".format(blob_backup.destination, checksum))
             except JournalError:
                 journal_healthy = False
                 raise
@@ -2005,6 +2213,10 @@ def execute_delete(client, args, reporter):
     reporter.emit("Result: deleted={}, skipped={}, failed={}, protected={}, unprocessed={}, pim_failed={}.".format(
         deleted, skipped, failed, len(blocked), len(actionable) - deleted - skipped - failed, pim_failed))
     reporter.emit("Rollback journal: " + str(path))
+    if args.include_user_details:
+        result_path = path.with_name(path.stem + "-deleted-users.csv")
+        users, assignments = write_deleted_users_csv(path, result_path)
+        reporter.emit("Deleted-user CSV: {} | Users: {} | Successful role deletions: {}.".format(result_path, users, assignments))
     return 1 if failed or blocked or pim_failed else 0
 
 
@@ -2204,8 +2416,12 @@ def restore_record(client, record, state, args, reporter, journal):
 
 
 def execute_rollback(args, reporter, client=None):
+    args.rollback_blob_verified = False
+    args.rollback_blob_initial_verified = False
     path = journal_path(args)
     blob_backup = blob_backup_from_args(args, reporter)
+    if args.apply and args.require_blob_backup and blob_backup is None:
+        raise JournalError("Blob rollback backup is mandatory before applying restoration.")
     with RollbackJournal(path) as journal:
         rows = journal.read()
         header, selection, snapshots, states = journal_state(rows)
@@ -2266,11 +2482,18 @@ def execute_rollback(args, reporter, client=None):
             client.verify_context()
             journal.prepare_append()
             if blob_backup is not None:
-                journal.enable_blob_backup(blob_backup)
+                journal.enable_blob_backup(blob_backup, verify=args.require_blob_backup)
+                args.rollback_blob_initial_verified = args.require_blob_backup
                 reporter.emit("Rollback journal synchronized to Blob before restoration.")
             client.allow_writes = True
         elif args.apply and blob_backup is not None:
-            reporter.emit("Blob upload skipped: no restoration candidates; Azure mutations=0.")
+            if args.require_blob_backup:
+                journal.enable_blob_backup(blob_backup, verify=True)
+                args.rollback_blob_initial_verified = True
+                args.rollback_blob_verified = True
+                reporter.emit("Rollback Blob persisted and verified; no restoration candidates.")
+            else:
+                reporter.emit("Blob upload skipped: no restoration candidates; Azure mutations=0.")
         try:
             for index, record in enumerate(candidates, 1):
                 try:
@@ -2289,6 +2512,10 @@ def execute_rollback(args, reporter, client=None):
                     break
             if args.apply and candidates:
                 journal.append("rollback_summary", counts=counts)
+                if args.require_blob_backup:
+                    checksum = journal.verify_blob_backup()
+                    args.rollback_blob_verified = True
+                    reporter.emit("Rollback Blob final readback VERIFIED: {} | SHA256={}".format(blob_backup.destination, checksum))
         finally:
             client.allow_writes = False
         reporter.emit("Rollback result: " + ", ".join("{}={}".format(key, value) for key, value in sorted(counts.items())))
@@ -2561,6 +2788,8 @@ def build_parser():
         command.add_argument("--rollback-file", required=command is rollback)
         command.add_argument("--rollback-blob-sas-url-env", type=environment_name,
                              help="Environment variable containing a full Blob SAS URL. With --apply, mirror the local journal before mutations.")
+        command.add_argument("--require-blob-backup", action="store_true",
+                             help="With --apply, require remote rollback backup and verify its bytes before changes and at completion.")
         command.add_argument("--allow-ephemeral-backup", action="store_true")
         command.add_argument("--verbose", action="store_true")
         command.add_argument("--timeout", type=int, default=60, help="HTTP/CLI timeout in seconds (default: 60).")
@@ -2577,6 +2806,8 @@ def build_parser():
     delete.add_argument("--include-resource-descendants", action="store_true")
     delete.add_argument("--preview-file", type=nonempty,
                         help="Delete dry-run CSV path. Default: unique preview CSV; never a rollback source.")
+    delete.add_argument("--include-user-details", action="store_true",
+                        help="Resolve User names/UPNs/email through Graph before changes and export successful deleted-user CSV.")
     for option in ("description-contains", "principal-name", "principal-name-contains", "principal-email"):
         delete.add_argument("--" + option, action="append", type=nonempty, help="Repeat for OR values.")
     delete.add_argument("--description-not-contains", action="append", type=nonempty,
@@ -2632,8 +2863,7 @@ def main(argv=None):
         return 1
 
 
-
-AUTOMATION_CORE_SHA256 = '3bf07bc31fabb269e9d48711eb82b6c824ef5ff3a879d952fd3aa443f9262649'
+AUTOMATION_CORE_SHA256 = 'c41b696ca8d03731e211dce9ffece18d6f97f4a29745d61891d1bf801aada690'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
@@ -2663,7 +2893,7 @@ def automation_default_configuration():
         "arguments": [
             "delete", "--management-group", "KT_GPU", "--subscriptions-only", "--principal-type", "User",
             "--exclude-custom-role-name-prefix", "(KT", "--description-not-contains", "[SNOW_AUTO]",
-            "--assignment-kind", "regular", "--allow-nonrestorable-pim", "--source", "arg", "--dry-run",
+            "--assignment-kind", "regular", "--source", "arg", "--dry-run",
         ],
         "confirm_apply": None,
         "backup_container_sas_variable": None,
@@ -2837,9 +3067,7 @@ def automation_download_journal(url, path, timeout):
             stream.flush()
             os.fsync(stream.fileno())
     except urllib.error.HTTPError as error:
-        status = error.code
-        error.close()
-        raise SafetyError("Rollback Blob download failed (HTTP {}). SAS details suppressed.".format(status)) from None
+        raise blob_http_error(error, "GET download", transport.destination) from None
     except (OSError, urllib.error.URLError, http.client.HTTPException, ValueError, SafetyError):
         raise SafetyError("Rollback Blob download failed or exceeded 256 MiB. SAS details suppressed.") from None
 
@@ -2859,6 +3087,9 @@ def automation_save_result(container, name, path, output, args, exit_code, error
         "exit_code": exit_code, "error": error, "core_sha256": AUTOMATION_CORE_SHA256,
         "python_runtime": sys.version.split()[0], "summary": None, "plan": None,
         "rollback_blob_url": None, "preview_blob_url": None, "preview_users": None,
+        "rollback_blob_initial_verified": bool(getattr(args, "rollback_blob_initial_verified", False)),
+        "rollback_blob_verified": bool(getattr(args, "rollback_blob_verified", False)),
+        "deleted_users_blob_url": None, "deleted_users": None, "deleted_role_assignments": None,
     }
     if rollback_url:
         parsed = urllib.parse.urlsplit(rollback_url)
@@ -2888,6 +3119,26 @@ def automation_save_result(container, name, path, output, args, exit_code, error
             print("Preview Blob saved: " + report["preview_blob_url"], flush=True)
         except (SafetyError, OSError, UnicodeError, csv.Error) as upload_error:
             failures.append("CSV output storage failed: " + str(upload_error))
+    if args.command == "delete" and args.apply and output.exists():
+        deleted_csv = output.with_name(output.stem + "-deleted-users.csv")
+        try:
+            if not deleted_csv.exists():
+                write_deleted_users_csv(output, deleted_csv)
+            with deleted_csv.open(encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if reader.fieldnames != list(DELETED_USER_COLUMNS):
+                    raise ValueError("Deleted-user CSV columns are invalid")
+                count, assignments = 0, 0
+                for row in reader:
+                    count += 1
+                    assignments += int(row["deleted_role_assignments"])
+            report["deleted_users"] = count
+            report["deleted_role_assignments"] = assignments
+            report["deleted_users_blob_url"] = automation_upload_file(
+                container, name + "-deleted-users.csv", deleted_csv, args.timeout, "text/csv; charset=utf-8")
+            print("Deleted-user CSV Blob saved: " + report["deleted_users_blob_url"], flush=True)
+        except (SafetyError, OSError, UnicodeError, csv.Error, ValueError) as upload_error:
+            failures.append("Deleted-user CSV storage failed: " + str(upload_error))
     if failures:
         report["exit_code"] = exit_code or 1
         report["output_errors"] = failures
@@ -2902,7 +3153,7 @@ def automation_save_result(container, name, path, output, args, exit_code, error
     except (SafetyError, OSError, UnicodeError) as upload_error:
         failures.append("Result output storage failed: " + str(upload_error))
     if failures:
-        raise SafetyError(" ".join(failures))
+        raise SafetyError("\n".join(failures))
 
 
 def automation_configuration(argv):
@@ -2945,6 +3196,7 @@ def automation_main(argv=None):
         print("Apply always requires dry_run=false, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
         print("Container SAS source: backup_container_sas_url, backup_container_sas_variable or backup_container_sas_env (exactly one).")
         print("Set save_output=true to store a result JSON and any preview CSV in the same Blob container; dry-run uploads require this opt-in.")
+        print("User names/UPNs/email are resolved automatically (Graph application User.Read.All required). Apply requires verified Blob rollback storage.")
         print("Supported names: " + ", ".join(AUTOMATION_PARAMETER_TYPES))
         return 0
     internal_sas = "RBAC_AUTOMATION_JOURNAL_SAS_URL"
@@ -2998,7 +3250,9 @@ def automation_main(argv=None):
         if args.tenant_id and args.tenant_id != tenant:
             raise SafetyError("Runbook tenant_id conflicts with --tenant-id.")
         args.tenant_id = tenant
+        args.require_blob_backup = True
         if args.command == "delete":
+            args.include_user_details = True
             scope_from_args(args)
             if not 1 <= args.read_workers <= 16 or not 1 <= args.delete_workers <= 32 or not 1 <= args.delete_batch_size <= 500:
                 raise SafetyError("Read/delete workers or delete batch size is out of range.")
@@ -3020,6 +3274,9 @@ def automation_main(argv=None):
             url = automation_blob_url(container, name)
             os.environ[internal_sas] = url
             args.rollback_blob_sas_url_env = internal_sas
+            parsed_target = urllib.parse.urlsplit(url)
+            print("Required rollback Blob target: " + urllib.parse.urlunsplit(
+                (parsed_target.scheme, parsed_target.netloc, parsed_target.path, "", "")), flush=True)
         if args.command == "delete":
             print("Using Runbook default arguments: {} | User | regular | ARG | {}.".format(
                 args.management_group, "APPLY" if args.apply else "DRY RUN"), flush=True)
@@ -3035,6 +3292,8 @@ def automation_main(argv=None):
         if args.apply:
             args.yes = True
         result = execute_delete(client, args, client.reporter) if args.command == "delete" else execute_rollback(args, client.reporter, client)
+        if args.apply and result == 0 and not getattr(args, "rollback_blob_verified", False):
+            raise JournalError("Rollback Blob persistence was not verified. Refusing success; preserve the local journal.")
         if args.command == "delete" and not args.apply and output.exists():
             print("BEGIN_CSV_PREVIEW", flush=True)
             print(output.read_text(encoding="utf-8-sig"), end="", flush=True)
@@ -3067,7 +3326,8 @@ def automation_main(argv=None):
         else:
             os.environ[internal_sas] = previous_sas
         if directory is not None:
-            local_files = [path for path in (output, result_path) if path is not None and path.exists()]
+            deleted_csv = output.with_name(output.stem + "-deleted-users.csv") if output is not None else None
+            local_files = [path for path in (output, result_path, deleted_csv) if path is not None and path.exists()]
             if preserve_recovery and local_files:
                 for path in local_files:
                     label = "recovery journal" if path == output and path.suffix == ".jsonl" else "output"
