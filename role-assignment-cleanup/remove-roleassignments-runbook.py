@@ -755,14 +755,14 @@ class BlobJournalBackup:
             raise JournalError("Blob backup response is missing a valid ETag; no further mutations allowed.")
         return etag
 
-    def initialize(self, stream, create=False):
+    def initialize(self, stream, create=False, content_type="application/x-ndjson; charset=utf-8"):
         stream.seek(0)
         local = b"" if create else stream.read()
         existing = None if create else self.request("GET", read_limit=len(local) + 1, allow_missing=True)
         if existing is None:
             headers, _ = self.request("PUT", body=b"", headers={
                 "If-None-Match": "*", "x-ms-blob-type": "AppendBlob", "Content-Length": "0",
-                "x-ms-blob-content-type": "application/x-ndjson; charset=utf-8",
+                "x-ms-blob-content-type": content_type,
             })
             self.etag = self.response_etag(headers)
         else:
@@ -2633,10 +2633,28 @@ def main(argv=None):
 
 
 
-AUTOMATION_CORE_SHA256 = '303b37524af61665882216c46731762313d5e617b66557a7f1baf0a1b1a81cff'
+AUTOMATION_CORE_SHA256 = '3bf07bc31fabb269e9d48711eb82b6c824ef5ff3a879d952fd3aa443f9262649'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
+
+
+AUTOMATION_PARAMETER_TYPES = {
+    "command": str,
+    "tenant_id": str,
+    "management_group": str,
+    "dry_run": bool,
+    "save_output": bool,
+    "confirm_apply": str,
+    "backup_container_sas_url": str,
+    "backup_container_sas_variable": str,
+    "backup_container_sas_env": str,
+    "restore_blob_name": str,
+    "read_workers": int,
+    "delete_workers": int,
+    "delete_batch_size": int,
+    "reconcile_pending": bool,
+}
 
 
 def automation_default_configuration():
@@ -2650,7 +2668,9 @@ def automation_default_configuration():
         "confirm_apply": None,
         "backup_container_sas_variable": None,
         "backup_container_sas_env": None,
+        "backup_container_sas_url": None,
         "restore_blob_name": None,
+        "save_output": False,
     }
 
 
@@ -2759,9 +2779,12 @@ def automation_variable_value(name):
 def automation_container_secret(config):
     asset = config.get("backup_container_sas_variable")
     environment = config.get("backup_container_sas_env")
-    if bool(asset) == bool(environment):
-        raise SafetyError("Specify exactly one encrypted Automation variable or environment variable for the container SAS.")
-    if environment:
+    direct = config.get("backup_container_sas_url")
+    if sum(bool(value) for value in (asset, environment, direct)) != 1:
+        raise SafetyError("Specify exactly one container SAS URL, encrypted Automation variable, or environment variable.")
+    if direct:
+        value = direct
+    elif environment:
         try:
             environment_name(environment)
         except (argparse.ArgumentTypeError, TypeError):
@@ -2821,88 +2844,149 @@ def automation_download_journal(url, path, timeout):
         raise SafetyError("Rollback Blob download failed or exceeded 256 MiB. SAS details suppressed.") from None
 
 
+def automation_upload_file(container, name, path, timeout, content_type):
+    url = automation_blob_url(container, name)
+    backup = BlobJournalBackup(url, timeout)
+    with path.open("rb") as stream:
+        backup.initialize(stream, create=True, content_type=content_type)
+    return backup.destination
+
+
+def automation_save_result(container, name, path, output, args, exit_code, error, rollback_url):
+    report = {
+        "completed_at": iso_time(), "command": args.command, "mode": "apply" if args.apply else "dry-run",
+        "tenant_id": args.tenant_id, "management_group": getattr(args, "management_group", None),
+        "exit_code": exit_code, "error": error, "core_sha256": AUTOMATION_CORE_SHA256,
+        "python_runtime": sys.version.split()[0], "summary": None, "plan": None,
+        "rollback_blob_url": None, "preview_blob_url": None, "preview_users": None,
+    }
+    if rollback_url:
+        parsed = urllib.parse.urlsplit(rollback_url)
+        report["rollback_blob_url"] = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    failures = []
+    if output.exists() and output.suffix == ".jsonl":
+        try:
+            with output.open("rb") as stream:
+                for line in stream:
+                    if not line.endswith(b"\n"):
+                        raise ValueError("Incomplete trailing journal record")
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError("Invalid journal record")
+                    if row.get("event") == "plan_complete":
+                        report["plan"] = {key: row[key] for key in ("count", "actionable") if key in row}
+                    if row.get("event") in ("delete_summary", "rollback_summary"):
+                        report["summary"] = {key: value for key, value in row.items() if key not in ("event", "seq", "time")}
+        except (OSError, ValueError, UnicodeError):
+            failures.append("The local journal could not be fully read; do not treat its summary as complete.")
+    if output.exists() and output.suffix == ".csv":
+        try:
+            with output.open(encoding="utf-8-sig", newline="") as stream:
+                report["preview_users"] = sum(1 for _ in csv.DictReader(stream))
+            report["preview_blob_url"] = automation_upload_file(
+                container, name + "-preview.csv", output, args.timeout, "text/csv; charset=utf-8")
+            print("Preview Blob saved: " + report["preview_blob_url"], flush=True)
+        except (SafetyError, OSError, UnicodeError, csv.Error) as upload_error:
+            failures.append("CSV output storage failed: " + str(upload_error))
+    if failures:
+        report["exit_code"] = exit_code or 1
+        report["output_errors"] = failures
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(report, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        destination = automation_upload_file(container, name + "-result.json", path, args.timeout, "application/json")
+        print("Result Blob saved: " + destination, flush=True)
+    except (SafetyError, OSError, UnicodeError) as upload_error:
+        failures.append("Result output storage failed: " + str(upload_error))
+    if failures:
+        raise SafetyError(" ".join(failures))
+
+
 def automation_configuration(argv):
     if any(not isinstance(value, str) for value in argv):
         raise SafetyError("Runbook positional arguments must be strings; input values are not logged.")
-    parts = [value for value in argv if value.strip()]
-    hint = "Use config-variable:RbacCleanupConfig and store the JSON in that Automation variable."
-    if not parts:
-        return {}
-    prefix = "config-variable:"
-    if parts[0].strip().startswith(prefix):
-        name = parts[0].strip()[len(prefix):]
-        if len(parts) != 1 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}", name):
-            raise SafetyError("Pass a single config-variable:NAME without spaces or additional arguments.")
-        payload = automation_variable_value(name)
-        if isinstance(payload, dict):
-            return payload
-        if not isinstance(payload, str) or not payload.strip():
-            raise SafetyError("The Automation configuration variable must contain a JSON object or JSON string.")
-    else:
-        inside_string = escaped = False
-        for index, part in enumerate(parts):
-            for character in part:
-                if escaped:
-                    escaped = False
-                elif character == "\\" and inside_string:
-                    escaped = True
-                elif character == '"':
-                    inside_string = not inside_string
-            if inside_string and index < len(parts) - 1:
-                raise SafetyError("A JSON string was split across positional arguments; its original spaces cannot be verified. " + hint)
-        payload = " ".join(parts)
-
-    def unique_fields(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("Duplicate configuration field")
-            result[key] = value
-        return result
-
-    try:
-        return json.loads(payload, object_pairs_hook=unique_fields)
-    except ValueError:
-        raise SafetyError(
-            "Invalid or ambiguous JSON configuration (positional arguments: {}). "
-            "Automation may split spaces or remove quotes. ".format(len(argv)) + hint
-        ) from None
+    config = {}
+    for part in argv:
+        part = part.strip()
+        if not part:
+            continue
+        name, separator, value = part.partition("=")
+        if (not separator or name not in AUTOMATION_PARAMETER_TYPES or not value
+                or any(character.isspace() for character in part)):
+            raise SafetyError("Enter one supported name=value per positional parameter, without spaces. JSON input is not supported; values are not logged.")
+        if name in config:
+            raise SafetyError("Duplicate Runbook parameter; specify each name only once. Values are not logged.")
+        value_type = AUTOMATION_PARAMETER_TYPES[name]
+        if value_type is bool:
+            if value.casefold() not in ("true", "false"):
+                raise SafetyError(name + " must be true or false.")
+            value = value.casefold() == "true"
+        elif value_type is int:
+            if not re.fullmatch(r"[0-9]+", value):
+                raise SafetyError(name + " must be an integer.")
+            try:
+                value = int(value)
+            except ValueError:
+                raise SafetyError(name + " must be a supported integer.") from None
+        config[name] = value
+    return config
 
 
 def automation_main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv == ["--help"]:
         print("No parameters: KT_GPU subscriptions-only User regular ARG dry-run; preserves (KT Custom Roles and [SNOW_AUTO] descriptions.")
-        print("Override defaults with config-variable:RbacCleanupConfig (JSON stored in an Automation variable).")
-        print("Direct JSON is also supported when quotes and string values are preserved. Input values are never logged.")
-        print("JSON fields: tenant_id, arguments (CLI string array), optional backup_container_sas_variable/env and restore_blob_name.")
-        print("Omitted JSON fields use automation_default_configuration(); an explicit arguments array replaces all default CLI arguments.")
-        print("Apply always requires --apply, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
+        print("Enter one name=value in each positional parameter, e.g. management_group=KT_GPU and dry_run=true. Order is irrelevant.")
+        print("JSON and config-variable input are not supported. Input values are never logged.")
+        print("command=delete (default) or command=rollback; dry_run=true (default) or dry_run=false.")
+        print("Apply always requires dry_run=false, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
+        print("Container SAS source: backup_container_sas_url, backup_container_sas_variable or backup_container_sas_env (exactly one).")
+        print("Set save_output=true to store a result JSON and any preview CSV in the same Blob container; dry-run uploads require this opt-in.")
+        print("Supported names: " + ", ".join(AUTOMATION_PARAMETER_TYPES))
         return 0
     internal_sas = "RBAC_AUTOMATION_JOURNAL_SAS_URL"
     previous_sas = os.environ.get(internal_sas)
     directory = None
     output = None
+    result_path = None
+    container = None
+    output_name = None
+    args = None
+    error_message = None
+    result = 1
+    save_output = False
     preserve_recovery = False
     try:
         config = automation_configuration(argv)
-        fields = {"tenant_id", "arguments", "confirm_apply", "backup_container_sas_variable",
-                  "backup_container_sas_env", "restore_blob_name"}
-        if not isinstance(config, dict) or set(config) - fields:
-            raise SafetyError("Runbook configuration contains unsupported fields.")
-        default_arguments = "arguments" not in config
+        specified = set(config)
         config = dict(automation_default_configuration(), **config)
+        save_output = config["save_output"]
         try:
             tenant = guid(config.get("tenant_id"))
         except (argparse.ArgumentTypeError, TypeError):
             raise SafetyError("Runbook tenant_id must be a valid tenant GUID.") from None
-        arguments = config.get("arguments")
-        if (not isinstance(arguments, list) or not arguments or arguments[0] not in ("delete", "rollback")
-                or any(not isinstance(value, str) for value in arguments)):
-            raise SafetyError("Runbook arguments must be a CLI string array starting with delete or rollback.")
-        forbidden = ("--preview-file", "--rollback-file", "--rollback-blob-sas-url-env")
-        if any(value.split("=", 1)[0] in forbidden or "sig=" in urllib.parse.unquote(value).casefold() for value in arguments):
-            raise SafetyError("The runbook manages report/journal paths and SAS secrets; do not pass them in arguments.")
+        command = config.get("command", "delete")
+        if command not in ("delete", "rollback"):
+            raise SafetyError("command must be delete or rollback.")
+        if command == "rollback":
+            if specified.intersection(("management_group", "read_workers", "delete_workers", "delete_batch_size")):
+                raise SafetyError("Rollback uses its journal scope and serial restoration; management_group and worker overrides are delete-only.")
+            arguments = ["rollback", "--dry-run"]
+            if config.get("reconcile_pending", False):
+                arguments.append("--reconcile-pending")
+        else:
+            if config.get("reconcile_pending", False):
+                raise SafetyError("reconcile_pending is available only with command=rollback.")
+            arguments = config["arguments"]
+            if "management_group" in config:
+                arguments[arguments.index("--management-group") + 1] = config["management_group"]
+            for name in ("read_workers", "delete_workers", "delete_batch_size"):
+                if name in config:
+                    arguments.extend(["--" + name.replace("_", "-"), str(config[name])])
+        arguments[arguments.index("--dry-run")] = "--dry-run" if config.get("dry_run", True) else "--apply"
         directory = pathlib.Path(tempfile.mkdtemp(prefix="rbac-automation-"))
         applying = "--apply" in arguments
         preserve_recovery = applying
@@ -2922,17 +3006,25 @@ def automation_main(argv=None):
                 raise SafetyError("Managed identities cannot SelfActivate User eligibility; pregrant the runbook's required Azure RBAC permissions.")
         if args.apply and config.get("confirm_apply") != ("DELETE" if args.command == "delete" else "RESTORE"):
             raise SafetyError("Explicit confirm_apply=DELETE or RESTORE is required for Automation apply.")
-        if args.apply or args.command == "rollback":
+        if args.apply or args.command == "rollback" or save_output:
             container = automation_container_secret(config)
+            output_name = "rbac-cleanup-{}-{}".format(utc_now().strftime("%Y%m%dT%H%M%SZ"), uuid.uuid4().hex)
+            if save_output:
+                automation_blob_url(container, output_name + "-result.json")
+                result_path = directory / "result.json"
+        if args.apply or args.command == "rollback":
             if args.command == "rollback":
                 name = config.get("restore_blob_name")
             else:
-                name = "rbac-cleanup-{}-{}.jsonl".format(utc_now().strftime("%Y%m%dT%H%M%SZ"), uuid.uuid4().hex)
+                name = output_name + ".jsonl"
             url = automation_blob_url(container, name)
             os.environ[internal_sas] = url
             args.rollback_blob_sas_url_env = internal_sas
-        if default_arguments:
-            print("Using Runbook default arguments: KT_GPU | User | regular | ARG | DRY RUN.", flush=True)
+        if args.command == "delete":
+            print("Using Runbook default arguments: {} | User | regular | ARG | {}.".format(
+                args.management_group, "APPLY" if args.apply else "DRY RUN"), flush=True)
+        else:
+            print("Runbook rollback | {} | scope from journal.".format("APPLY" if args.apply else "DRY RUN"), flush=True)
         client = AutomationRestClient(tenant, args.timeout, Reporter(args.verbose))
         client.reporter.emit("Automation cleanup core: " + AUTOMATION_CORE_SHA256)
         client.reporter.emit("Python runtime: " + sys.version.split()[0])
@@ -2949,28 +3041,45 @@ def automation_main(argv=None):
             print("END_CSV_PREVIEW", flush=True)
         if result == 0:
             preserve_recovery = False
-        return result
     except KeyboardInterrupt:
-        print("Interrupted. Recover pending intents from the Blob journal.", file=sys.stderr)
-        return 130
+        error_message = "Interrupted. Recover pending intents from the Blob journal."
+        print(error_message, file=sys.stderr)
+        result = 130
     except (SafetyError, OSError) as error:
-        print("ERROR: " + str(error), file=sys.stderr)
-        return 1
+        error_message = str(error)
+        print("ERROR: " + error_message, file=sys.stderr)
+        result = 1
     finally:
+        if save_output and container is not None and result_path is not None and args is not None:
+            try:
+                automation_save_result(container, output_name, result_path, output, args, result, error_message,
+                                       os.environ.get(internal_sas) if args.rollback_blob_sas_url_env else None)
+            except (SafetyError, OSError) as output_error:
+                print("ERROR: " + str(output_error), file=sys.stderr)
+                result = result or 1
+                preserve_recovery = True
+            except KeyboardInterrupt:
+                print("Output storage interrupted; local output retained.", file=sys.stderr)
+                result = 130
+                preserve_recovery = True
         if previous_sas is None:
             os.environ.pop(internal_sas, None)
         else:
             os.environ[internal_sas] = previous_sas
         if directory is not None:
-            if preserve_recovery and output is not None and output.exists():
-                print("Local recovery journal retained: {}. Sandbox storage is ephemeral; recover from Blob if necessary.".format(output), file=sys.stderr)
+            local_files = [path for path in (output, result_path) if path is not None and path.exists()]
+            if preserve_recovery and local_files:
+                for path in local_files:
+                    label = "recovery journal" if path == output and path.suffix == ".jsonl" else "output"
+                    print("Local {} retained: {}. Sandbox storage is ephemeral; recover from Blob if necessary.".format(label, path), file=sys.stderr)
             else:
                 try:
-                    if output is not None:
-                        output.unlink(missing_ok=True)
+                    for path in local_files:
+                        path.unlink()
                     directory.rmdir()
                 except OSError:
                     print("WARNING: Automation temporary directory could not be removed: " + str(directory), file=sys.stderr)
+    return result
 
 
 if __name__ == "__main__":
