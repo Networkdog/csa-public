@@ -454,16 +454,27 @@ def arg_assignments(client, selection, filters, reporter):
     return list(results.values())
 
 
-def arm_assignments(client, selection):
-    results = {}
-    for scope in selection.read_scopes():
+def arm_assignments(client, selection, scopes=None, workers=1, reporter=None):
+    scopes = sorted(set(selection.read_scopes() if scopes is None else scopes))
+
+    def read_scope(scope):
+        records = []
         query = {"$filter": "atScope()"} if scope.startswith("/providers/") else {}
         path = api_path(scope + "/providers/Microsoft.Authorization/roleAssignments", RBAC_API, **query)
         for raw in client.values(path):
             if not selection.contains(raw.get("properties", {}).get("scope")):
                 continue
             validate_assignment(raw)
-            results[raw["id"].casefold()] = raw
+            records.append(raw)
+        return records
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for index, records in enumerate(pool.map(read_scope, scopes), 1):
+            for raw in records:
+                results[raw["id"].casefold()] = raw
+            if reporter:
+                reporter.progress("ARM bulk scopes", index, len(scopes))
     return list(results.values())
 
 
@@ -1095,6 +1106,43 @@ def get_live_assignment(client, identifier):
     return raw
 
 
+def collect_rbac_assignments(client, selection, filters, source, reporter, workers=4):
+    if source == "arm":
+        records = arm_assignments(client, selection, workers=workers, reporter=reporter)
+        reporter.emit("RBAC inventory: {} assignments from authoritative ARM lists; no initial per-ID GET.".format(len(records)))
+        return {raw["id"].casefold(): raw for raw in records}
+    if source != "arg":
+        raise SafetyError("Unsupported RBAC inventory source: " + str(source))
+    candidates = arg_assignments(client, selection, filters, reporter)
+    identifiers = {raw["id"].casefold(): raw["id"] for raw in candidates
+                   if selection.contains(entity_scope(raw["id"], "roleAssignments"))}
+    if not identifiers:
+        reporter.emit("ARG candidates: 0; no ARM role-assignment lists required.")
+        return {}
+    scopes = set()
+    for identifier in identifiers.values():
+        if selection.kind != "management-group":
+            scopes.add(selection.root)
+        else:
+            scope = entity_scope(identifier, "roleAssignments")
+            scopes.add("/subscriptions/" + scope.split("/")[2] if scope.startswith("/subscriptions/") else scope)
+    reporter.emit("ARG candidates: {}. Reading authoritative ARM lists in {} scope(s).".format(len(identifiers), len(scopes)))
+    records = arm_assignments(client, selection, scopes=scopes, workers=workers, reporter=reporter)
+    backing = {raw["id"].casefold(): raw for raw in records if raw["id"].casefold() in identifiers}
+    bulk_count = len(backing)
+    missing = [identifiers[key] for key in sorted(set(identifiers) - set(backing))]
+    if missing:
+        reporter.emit("ARM lists omitted {} ARG candidate(s); verifying only these IDs with GET.".format(len(missing)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for index, raw in enumerate(pool.map(lambda identifier: get_live_assignment(client, identifier), missing), 1):
+                if raw is not None:
+                    backing[raw["id"].casefold()] = raw
+                reporter.progress("ARM fallback reads", index, len(missing))
+    reporter.emit("RBAC inventory: bulk={}, GET fallback={}, absent={}.".format(
+        bulk_count, len(missing), len(identifiers) - len(backing)))
+    return backing
+
+
 def discover_records(client, selection, filters, source, reporter, workers=4, assume_no_pim=False):
     if assume_no_pim and set(filters.assignment_kind) != {"regular"}:
         raise SafetyError("--assume-no-pim is only allowed with --assignment-kind regular.")
@@ -1106,15 +1154,7 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
     if (selection.subscription_name_contains or selection.subscriptions_only) and not selection.subscriptions:
         reporter.emit("No subscriptions inside the selected scope; Azure mutations=0.")
         return [], PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
-    candidates = arg_assignments(client, selection, filters, reporter) if source == "arg" else arm_assignments(client, selection)
-    identifiers = sorted({raw["id"] for raw in candidates if selection.contains(entity_scope(raw["id"], "roleAssignments"))})
-    reporter.emit("RBAC candidates: {}. Reading live properties and PIM state.".format(len(identifiers)))
-    backing = {}
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for index, raw in enumerate(pool.map(lambda identifier: get_live_assignment(client, identifier), identifiers), 1):
-            if raw is not None:
-                backing[raw["id"].casefold()] = raw
-            reporter.progress("Live RBAC reads", index, len(identifiers))
+    backing = collect_rbac_assignments(client, selection, filters, source, reporter, workers)
     inventory = PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
     if assume_no_pim:
         reporter.emit("WARNING: Operator asserted this scope contains no PIM assignments. PIM exclusion is NOT verified.")
@@ -2334,8 +2374,10 @@ def build_parser():
                         help="Exclude CustomRole names starting with any given literal prefix. BuiltInRole assignments remain eligible.")
     delete.add_argument("--assignment-kind", action="append", choices=KINDS, help="Default: regular only.")
     delete.add_argument("--expiration", choices=("any", "permanent", "time-bound"), default="any")
-    delete.add_argument("--source", choices=("arg", "arm"), default="arg")
-    delete.add_argument("--read-workers", type=int, default=4, help="Concurrent read-only ARM requests (1-16, default: 4).")
+    delete.add_argument("--source", choices=("arg", "arm"), default="arg",
+                        help="Default: ARG candidates with bulk ARM property reads. arm lists directly; both verify again before deletion.")
+    delete.add_argument("--read-workers", type=int, default=4,
+                        help="Concurrent read-only ARM scope lists and missing-ID GET fallbacks (1-16, default: 4).")
     delete.add_argument("--allow-nonrestorable-pim", action="store_true")
     delete.add_argument("--allow-self-removal", action="store_true")
     delete.add_argument("--use-pim-for-owner-removal", action="store_true",
