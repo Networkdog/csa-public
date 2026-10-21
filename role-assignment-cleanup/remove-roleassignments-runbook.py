@@ -51,6 +51,13 @@ PIM_ACCESS_EVENTS = {
     "pim_activation_intent", "pim_activation_success", "pim_activation_failure",
     "pim_activation_reused", "pim_cleanup_intent", "pim_cleanup_success", "pim_cleanup_failure",
 }
+PIM_OWNER_ELIGIBILITY_EVENTS = {
+    "pim_owner_eligibility_intent", "pim_owner_eligibility_created", "pim_owner_eligibility_create_failure",
+    "pim_owner_eligibility_reused", "pim_owner_eligibility_cleanup_intent",
+    "pim_owner_eligibility_cleanup_success", "pim_owner_eligibility_cleanup_failure",
+}
+PIM_MINIMUM_ASSIGNMENT_SECONDS = 305
+TEMP_OWNER_ELIGIBILITY_SECONDS = 600
 PREVIEW_COLUMNS = ("principal_id", "display_name", "email")
 DELETED_USER_COLUMNS = (
     "principal_id", "display_name", "user_principal_name", "email", "deleted_role_assignments",
@@ -957,6 +964,7 @@ class RollbackJournal:
         self.append_ready = create
         self.locked = False
         self.blob_backup = None
+        self.append_lock = threading.RLock()
         try:
             if create:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -1005,31 +1013,32 @@ class RollbackJournal:
         self.append_many([(event, data)])
 
     def append_many(self, entries):
-        if not self.append_ready:
-            raise JournalError("Journal append has not been enabled.")
-        sequence = self.sequence
-        try:
-            self.file.seek(0, os.SEEK_END)
-            for event, data in entries:
-                sequence += 1
-                row = dict(data, event=event, seq=sequence, time=iso_time())
-                self.file.write((json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
-            if sequence == self.sequence:
-                return
-            self.file.flush()
-            os.fsync(self.file.fileno())
-        except (OSError, ValueError, TypeError, UnicodeError) as error:
-            self.append_ready = False
-            raise JournalError("Journal write/fsync failed. Stop all mutations; reconcile the last recorded intent.") from error
-        self.sequence = sequence
-        if self.blob_backup is not None:
+        with self.append_lock:
+            if not self.append_ready:
+                raise JournalError("Journal append has not been enabled.")
+            sequence = self.sequence
             try:
-                self.blob_backup.sync(self.file)
-            except (JournalError, OSError) as error:
+                self.file.seek(0, os.SEEK_END)
+                for event, data in entries:
+                    sequence += 1
+                    row = dict(data, event=event, seq=sequence, time=iso_time())
+                    self.file.write((json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+                if sequence == self.sequence:
+                    return
+                self.file.flush()
+                os.fsync(self.file.fileno())
+            except (OSError, ValueError, TypeError, UnicodeError) as error:
                 self.append_ready = False
-                if isinstance(error, JournalError):
-                    raise
-                raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
+                raise JournalError("Journal write/fsync failed. Stop all mutations; reconcile the last recorded intent.") from error
+            self.sequence = sequence
+            if self.blob_backup is not None:
+                try:
+                    self.blob_backup.sync(self.file)
+                except (JournalError, OSError) as error:
+                    self.append_ready = False
+                    if isinstance(error, JournalError):
+                        raise
+                    raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
 
     def enable_blob_backup(self, backup, create=False, verify=False):
         try:
@@ -1174,6 +1183,7 @@ def write_dry_run_journal(path, client, selection, filters, args, records, actio
                        selection=scope_document(selection), filters=asdict(filters), source=args.source,
                        pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified",
                        pimOwnerRemoval=args.use_pim_for_owner_removal,
+                       pimLastOwnerConversion=args.convert_last_owner_to_eligible,
                        blobBackupEnabled=blob_backup is not None,
                        temporaryPimAccess=[{"scope": access.eligibility.scope,
                                             "eligibilityId": access.eligibility.identifier,
@@ -1839,6 +1849,227 @@ def pim_remove_body(record):
     return {"properties": properties}
 
 
+def is_subscription_owner_record(record):
+    return (
+        record.route == "rbac" and record.kind == "regular"
+        and record.scope.startswith("/subscriptions/") and len(record.scope.split("/")) == 3
+        and record.properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold() == OWNER_ROLE_ID
+    )
+
+
+def subscription_owner_assignments(client, scope):
+    scope = normalize_scope(scope)
+    if not scope.startswith("/subscriptions/") or len(scope.split("/")) != 3:
+        raise SafetyError("Last Owner checks require an exact subscription scope.")
+    path = api_path(scope + "/providers/Microsoft.Authorization/roleAssignments", RBAC_API, **{"$filter": "atScope()"})
+    owners = {}
+    for raw in client.values(path):
+        actual_scope = validate_assignment(raw)
+        if (actual_scope == scope
+                and raw["properties"]["roleDefinitionId"].rsplit("/", 1)[-1].casefold() == OWNER_ROLE_ID):
+            owners[raw["id"].casefold()] = raw
+    return owners
+
+
+def existing_owner_eligibility(inventory, owner_record):
+    inventory.include_eligible = True
+    inventory.load(owner_record.scope, exact=True)
+    now = utc_now()
+    principal_id = owner_record.properties["principalId"].casefold()
+    candidates, conflicts = [], []
+    for raw in inventory.eligibilities.values():
+        properties = raw["properties"]
+        if (normalize_scope(properties["scope"]) != owner_record.scope
+                or properties["principalId"].casefold() != principal_id
+                or properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold() != OWNER_ROLE_ID):
+            continue
+        if pim_kind(raw, "eligibility") is None:
+            continue
+        start = parse_time(properties.get("startDateTime"), raw["id"] + " properties.startDateTime")
+        end = parse_time(properties.get("endDateTime"), raw["id"] + " properties.endDateTime")
+        if (properties.get("principalType") not in (None, "User") or properties.get("condition")
+                or (start and start > now)
+                or (end and (end - now).total_seconds() < PIM_MINIMUM_ASSIGNMENT_SECONDS)):
+            conflicts.append(raw)
+            continue
+        record = inventory.from_schedule(raw, "eligibility")
+        if record:
+            candidates.append(record)
+    if candidates:
+        return min(candidates, key=lambda record: record.identifier.casefold())
+    if conflicts:
+        raise SafetyError(
+            "An existing Owner eligibility is conditional, not yet effective or expiring too soon; "
+            "a second temporary PIM assignment was not attempted."
+        )
+    return None
+
+
+class TemporaryOwnerEligibility:
+    def __init__(self, owner_record):
+        self.owner = owner_record
+        self.request_id = str(uuid.uuid4())
+        self.request_endpoint = api_path(
+            owner_record.scope + "/providers/Microsoft.Authorization/roleEligibilityScheduleRequests/" + self.request_id,
+            PIM_API,
+        )
+        self.expires_at = utc_now() + timedelta(seconds=TEMP_OWNER_ELIGIBILITY_SECONDS)
+        self.record = None
+        self.created_monotonic = None
+        self.attempted = False
+        self.create_failed = False
+        self.uncertain = False
+        self.cleaned = False
+
+    def journal_context(self):
+        return {
+            "key": self.owner.key, "ownerKey": self.owner.key, "requestId": self.request_id,
+            "scope": self.owner.scope, "principalId": self.owner.properties["principalId"],
+            "roleDefinitionId": self.owner.properties["roleDefinitionId"], "expiresAt": iso_time(self.expires_at),
+        }
+
+    def read_schedule(self, client, identifier, inventory):
+        identifier = reference_id(self.owner.scope, identifier, "roleEligibilitySchedules")
+        raw = client.get_optional(api_path(identifier, PIM_API))
+        if raw is None:
+            return None
+        validate_assignment(raw, "roleEligibilitySchedules")
+        if raw["id"].casefold() != identifier:
+            raise SafetyError("PIM returned an unexpected temporary eligibility ID.")
+        record = inventory.from_schedule(raw, "eligibility")
+        if record is None:
+            raise SafetyError("PIM did not provision a live temporary Owner eligibility.")
+        self.record = record
+        self.created_monotonic = time.monotonic()
+        properties = record.properties
+        if (record.scope != self.owner.scope
+                or properties["principalId"].casefold() != self.owner.properties["principalId"].casefold()
+                or properties["roleDefinitionId"].rsplit("/", 1)[-1].casefold() != OWNER_ROLE_ID
+                or properties.get("principalType") not in (None, "User")
+                or properties.get("condition")):
+            raise SafetyError("PIM temporary eligibility does not match the target Owner identity and scope.")
+        start = parse_time(properties.get("startDateTime"), record.identifier + " properties.startDateTime")
+        end = parse_time(properties.get("endDateTime"), record.identifier + " properties.endDateTime")
+        if (start and start > utc_now()) or end is None or end > self.expires_at + timedelta(seconds=30):
+            raise SafetyError("PIM did not honor the bounded temporary Eligible Owner expiration.")
+        if (end - utc_now()).total_seconds() < PIM_MINIMUM_ASSIGNMENT_SECONDS:
+            raise SafetyError("PIM temporary eligibility has less than five minutes remaining.")
+        return record
+
+    def recover_schedule(self, client, inventory):
+        try:
+            response = client.get_optional(self.request_endpoint)
+        except (SafetyError, OSError):
+            return
+        if not isinstance(response, dict) or not isinstance(response.get("properties"), dict):
+            return
+        properties = response["properties"]
+        target = properties.get("targetRoleEligibilityScheduleId")
+        if target:
+            try:
+                self.read_schedule(client, target, inventory)
+            except (SafetyError, OSError):
+                self.uncertain = True
+            return
+        self.uncertain = properties.get("status") not in PIM_TERMINAL
+
+    def create(self, client, inventory, journal, timeout, reporter):
+        context = self.journal_context()
+        journal.append("pim_owner_eligibility_intent", **context)
+        properties = {
+            "principalId": self.owner.properties["principalId"],
+            "roleDefinitionId": self.owner.properties["roleDefinitionId"],
+            "requestType": "AdminAssign",
+            "justification": "Temporarily protect the last subscription Owner during RBAC cleanup",
+            "scheduleInfo": {
+                "startDateTime": iso_time(),
+                "expiration": {"type": "AfterDateTime", "endDateTime": iso_time(self.expires_at)},
+            },
+        }
+        self.attempted = True
+        try:
+            client.request("PUT", self.request_endpoint, {"properties": properties})
+            response = wait_pim_request(client, self.request_endpoint, timeout, reporter)
+            if not isinstance(response, dict) or not isinstance(response.get("properties"), dict):
+                raise SafetyError("PIM returned an invalid AdminAssign request response.")
+            target = response.get("properties", {}).get("targetRoleEligibilityScheduleId")
+            if not target:
+                raise SafetyError("PIM completed the AdminAssign request without returning its eligibility ID.")
+            record = self.read_schedule(client, target, inventory)
+            if record is None:
+                raise SafetyError("PIM AdminAssign completed but the temporary eligibility is not readable.")
+            created_context = dict(context, scheduleId=record.identifier, expiresAt=record.properties.get("endDateTime"))
+            journal.append("pim_owner_eligibility_created", **created_context)
+            reporter.emit("Temporary Eligible Owner created: " + record.identifier)
+            return record
+        except JournalError:
+            raise
+        except (SafetyError, OSError) as error:
+            self.recover_schedule(client, inventory)
+            self.create_failed = True
+            known_rejection = isinstance(error, ApiError) and error.status in (400, 401, 403, 404, 409, 422, 429)
+            self.uncertain = self.uncertain or (self.attempted and self.record is None and not known_rejection)
+            journal.append(
+                "pim_owner_eligibility_create_failure", **context,
+                scheduleId=self.record.identifier if self.record else None,
+                uncertain=self.uncertain, error=str(error),
+            )
+            raise
+
+    def cleanup(self, client, journal, timeout, reporter):
+        if self.record is None or self.cleaned:
+            return
+        cleanup_request_id = str(uuid.uuid4())
+        try:
+            if removal_observed(client, self.record):
+                journal.append(
+                    "pim_owner_eligibility_cleanup_success", key=self.owner.key, ownerKey=self.owner.key,
+                    sourceRequestId=self.request_id, scheduleId=self.record.identifier,
+                    status="already_removed_or_expired",
+                )
+                self.cleaned = True
+                return
+            elapsed = time.monotonic() - (self.created_monotonic or time.monotonic())
+            delay = max(0, PIM_MINIMUM_ASSIGNMENT_SECONDS - elapsed)
+            if delay:
+                reporter.emit("Waiting up to {:.0f}s for Azure PIM's five-minute minimum before Eligible cleanup.".format(delay))
+                time.sleep(delay)
+            if removal_observed(client, self.record):
+                journal.append(
+                    "pim_owner_eligibility_cleanup_success", key=self.owner.key, ownerKey=self.owner.key,
+                    sourceRequestId=self.request_id, scheduleId=self.record.identifier,
+                    status="expired_before_remove",
+                )
+                self.cleaned = True
+                return
+            journal.append(
+                "pim_owner_eligibility_cleanup_intent", key=self.owner.key, ownerKey=self.owner.key,
+                sourceRequestId=self.request_id, cleanupRequestId=cleanup_request_id,
+                scheduleId=self.record.identifier, expiresAt=self.record.properties.get("endDateTime"),
+            )
+            endpoint = request_path(self.record, cleanup_request_id)
+            client.request("PUT", endpoint, pim_remove_body(self.record))
+            wait_pim_request(client, endpoint, timeout, reporter)
+            wait_removed(client, self.record, timeout)
+            journal.append(
+                "pim_owner_eligibility_cleanup_success", key=self.owner.key, ownerKey=self.owner.key,
+                sourceRequestId=self.request_id, cleanupRequestId=cleanup_request_id,
+                scheduleId=self.record.identifier, status="removed",
+            )
+            self.cleaned = True
+            reporter.emit("Temporary Eligible Owner removed: " + self.record.identifier)
+        except JournalError:
+            raise
+        except (SafetyError, OSError) as error:
+            journal.append(
+                "pim_owner_eligibility_cleanup_failure", key=self.owner.key, ownerKey=self.owner.key,
+                sourceRequestId=self.request_id, cleanupRequestId=cleanup_request_id,
+                scheduleId=self.record.identifier, expiresAt=self.record.properties.get("endDateTime"),
+                error=str(error),
+            )
+            raise
+
+
 class TemporaryPimAccess:
     def __init__(self, eligibility, activation=None):
         self.eligibility = eligibility
@@ -2102,12 +2333,94 @@ def check_pim_cleanup(client, pending, selection, reporter):
     return unresolved
 
 
+def pending_pim_owner_eligibility(rows):
+    pending = {}
+    for row in rows:
+        event = row.get("event")
+        request_id = row.get("requestId")
+        source_request_id = row.get("sourceRequestId")
+        if event == "pim_owner_eligibility_intent":
+            pending[request_id] = dict(row)
+        elif event == "pim_owner_eligibility_created" and request_id in pending:
+            pending[request_id].update(row)
+        elif event == "pim_owner_eligibility_create_failure" and request_id in pending:
+            if row.get("scheduleId") or row.get("uncertain"):
+                pending[request_id].update(row)
+            else:
+                pending.pop(request_id, None)
+        elif event in ("pim_owner_eligibility_cleanup_intent", "pim_owner_eligibility_cleanup_failure"):
+            if source_request_id in pending:
+                pending[source_request_id].update(row)
+        elif event == "pim_owner_eligibility_cleanup_success":
+            pending.pop(source_request_id, None)
+    return list(pending.values())
+
+
+def check_pending_pim_owner_eligibility(client, pending, selection, reporter):
+    unresolved = set()
+    for access in pending:
+        owner_key = access.get("ownerKey") or access.get("key")
+        if not isinstance(owner_key, str) or not owner_key:
+            owner_key = "*"
+        try:
+            scope = normalize_scope(access.get("scope"))
+            if not scope.startswith("/subscriptions/") or len(scope.split("/")) != 3 or not selection.contains(scope):
+                raise SafetyError("Temporary Eligible Owner scope is outside the original subscription selection.")
+            request_id_value = access.get("requestId")
+            try:
+                request_id = str(uuid.UUID(request_id_value))
+            except (ValueError, TypeError, AttributeError):
+                raise SafetyError("Temporary Eligible Owner journal request ID is invalid.") from None
+            schedule_id = access.get("scheduleId")
+            request = None
+            if not schedule_id:
+                request = client.get_optional(api_path(
+                    scope + "/providers/Microsoft.Authorization/roleEligibilityScheduleRequests/" + request_id,
+                    PIM_API,
+                ))
+                if not isinstance(request, dict) or not isinstance(request.get("properties"), dict):
+                    raise SafetyError("PIM AdminAssign outcome is not observable; verify its request ID manually.")
+                properties = request["properties"]
+                if properties.get("status") in PIM_TERMINAL:
+                    continue
+                target = properties.get("targetRoleEligibilityScheduleId")
+                if not target:
+                    raise SafetyError("PIM AdminAssign is pending without an observable target schedule.")
+                schedule_id = reference_id(scope, target, "roleEligibilitySchedules")
+            else:
+                schedule_id = reference_id(scope, schedule_id, "roleEligibilitySchedules")
+            raw = client.get_optional(api_path(schedule_id, PIM_API))
+            if raw is None:
+                if request and request.get("properties", {}).get("status") in PIM_TERMINAL:
+                    continue
+                raise SafetyError("Temporary Eligible Owner schedule is not readable; verify it manually.")
+            validate_assignment(raw, "roleEligibilitySchedules")
+            properties = raw["properties"]
+            if (normalize_scope(properties["scope"]) != scope
+                    or properties["principalId"].casefold() != str(access.get("principalId", "")).casefold()
+                    or properties["roleDefinitionId"].casefold() != str(access.get("roleDefinitionId", "")).casefold()):
+                raise SafetyError("PIM schedule identity differs from its temporary Owner journal intent.")
+            end = parse_time(properties.get("endDateTime"), raw["id"] + " properties.endDateTime")
+            if properties.get("status") in PIM_TERMINAL or (end and end <= utc_now()):
+                continue
+            unresolved.add(owner_key)
+            reporter.emit("MANUAL PIM CLEANUP REQUIRED: temporary Eligible Owner remains: {} | expires {}.".format(
+                schedule_id, properties.get("endDateTime") or "unknown"))
+        except (SafetyError, OSError) as error:
+            if owner_key:
+                unresolved.add(owner_key)
+            reporter.emit("MANUAL PIM CHECK REQUIRED: {} | request {} | {}".format(
+                access.get("scope"), access.get("requestId"), error))
+    return unresolved
+
+
 @dataclass(frozen=True)
 class DeleteOutcome:
     key: str
     status: str
     event: str
     detail: str = ""
+    pim_failed: bool = False
 
     def journal_entry(self):
         data = {"key": self.key}
@@ -2171,10 +2484,114 @@ def delete_with_intent(client, record, inventory, filters, args, reporter, reque
         return DeleteOutcome(record.key, "failed", "delete_uncertain" if attempted and not rejected else "delete_failure", str(error))
 
 
+def execute_serial_delete(client, record, inventory, filters, args, reporter, journal, stop,
+                          request_id=None, intent_written=False):
+    if stop.is_set():
+        return DeleteOutcome(record.key, "unprocessed", "delete_skipped", "Canceled after another failure; no mutation attempted.")
+    if record.route != "rbac" and request_id is None:
+        request_id = str(uuid.uuid4())
+    owner_access = None
+    delete_attempted = False
+    intent_written = bool(intent_written)
+    deletion_error = None
+    try:
+        current = refresh_record(client, record, inventory, filters)
+        if current is None:
+            return DeleteOutcome(record.key, "skipped", "delete_skipped", "Already missing/expired before mutation.")
+        if record.route == "eligibility" and fresh_linked_activations(client, record, reporter):
+            raise SafetyError("A linked activation is still present; no eligibility removal attempted.")
+        if stop.is_set():
+            return DeleteOutcome(record.key, "unprocessed", "delete_skipped", "Canceled after another failure; no mutation attempted.")
+        if not intent_written:
+            journal.append("delete_intent", key=record.key, requestId=request_id)
+            intent_written = True
+        if record.route == "rbac":
+            if args.convert_last_owner_to_eligible and is_subscription_owner_record(current):
+                verify_subscription_selection(client, inventory.selection, current.scope)
+                owners = subscription_owner_assignments(client, current.scope)
+                target_id = current.identifier.casefold()
+                target = owners.get(target_id)
+                if target is None:
+                    raise SafetyError("Subscription Owner assignments changed before deletion; no change attempted.")
+                if (target["id"].casefold() != current.identifier.casefold()
+                        or not same_assignment(target, current.raw)
+                        or canonical_properties(target["properties"]) != canonical_properties(current.raw["properties"])):
+                    raise SafetyError("Subscription Owner identity changed before deletion; no change attempted.")
+                if len(owners) == 1:
+                    if current.properties.get("principalType") != "User":
+                        raise SafetyError("The last subscription Owner is not a User; PIM eligibility cannot be created, so it was preserved.")
+                    if (current.properties.get("condition") or current.properties.get("delegatedManagedIdentityResourceId")):
+                        raise SafetyError("The last Owner has a condition or delegation; a matching PIM eligibility cannot be created safely.")
+                    existing = existing_owner_eligibility(inventory, current)
+                    if existing:
+                        journal.append(
+                            "pim_owner_eligibility_reused", key=current.key, ownerKey=current.key,
+                            scope=current.scope, principalId=current.properties["principalId"],
+                            roleDefinitionId=current.properties["roleDefinitionId"], scheduleId=existing.identifier,
+                        )
+                        reporter.emit("Using existing direct Eligible Owner during last-Owner removal: " + existing.identifier)
+                    else:
+                        owner_access = TemporaryOwnerEligibility(current)
+                        owner_access.create(client, inventory, journal, args.poll_timeout, reporter)
+            delete_attempted = True
+            client.request("DELETE", api_path(record.identifier, RBAC_API))
+        else:
+            endpoint = request_path(record, request_id)
+            delete_attempted = True
+            client.request("PUT", endpoint, pim_remove_body(record))
+            wait_pim_request(client, endpoint, args.poll_timeout, reporter)
+        wait_removed(client, record, args.poll_timeout)
+    except JournalError:
+        stop.set()
+        if owner_access and owner_access.record:
+            reporter.emit("MANUAL PIM CLEANUP REQUIRED: {} | schedule {} | request {} | expires {}".format(
+                record.scope, owner_access.record.identifier, owner_access.request_id,
+                owner_access.record.properties.get("endDateTime") or "unknown"))
+        elif owner_access and owner_access.uncertain:
+            reporter.emit("MANUAL PIM CHECK REQUIRED: {} | request {} | expires {}".format(
+                record.scope, owner_access.request_id, iso_time(owner_access.expires_at)))
+        raise
+    except (SafetyError, OSError) as error:
+        deletion_error = error
+
+    cleanup_error = None
+    if owner_access and owner_access.record and not owner_access.cleaned:
+        try:
+            owner_access.cleanup(client, journal, args.poll_timeout, reporter)
+        except JournalError:
+            stop.set()
+            reporter.emit("MANUAL PIM CLEANUP REQUIRED: {} | schedule {} | request {} | expires {}".format(
+                record.scope, owner_access.record.identifier, owner_access.request_id,
+                owner_access.record.properties.get("endDateTime") or "unknown"))
+            raise
+        except (SafetyError, OSError) as error:
+            cleanup_error = error
+            stop.set()
+            reporter.emit("MANUAL PIM CLEANUP REQUIRED: {} | schedule {} | request {} | expires {} | {}".format(
+                record.scope, owner_access.record.identifier, owner_access.request_id,
+                owner_access.record.properties.get("endDateTime") or "unknown", error))
+
+    if deletion_error:
+        rejected = isinstance(deletion_error, ApiError) and deletion_error.status in (400, 401, 403, 404, 409, 422, 429)
+        event = "delete_uncertain" if delete_attempted and not rejected else "delete_failure"
+        stop.set()
+        return DeleteOutcome(
+            record.key, "failed", event, str(deletion_error),
+            bool(owner_access and (owner_access.create_failed or owner_access.uncertain)) or cleanup_error is not None,
+        )
+    if cleanup_error:
+        return DeleteOutcome(record.key, "deleted", "delete_success", pim_failed=True)
+    return DeleteOutcome(
+        record.key, "deleted", "delete_success",
+        pim_failed=bool(owner_access and owner_access.uncertain),
+    )
+
+
 def execute_batched_deletes(client, records, inventory, filters, args, reporter, journal):
     stop = threading.Event()
     limits = {key: threading.Semaphore(4) for key in {subscription_work_key(record) for record in records}}
-    counts = {"deleted": 0, "skipped": 0, "failed": 0}
+    owner_limits = {key: threading.Semaphore(1) for key in {subscription_work_key(record) for record in records}}
+    counts = {"deleted": 0, "skipped": 0, "failed": 0, "pim_failed": 0}
     reported_failure = False
     checked = 0
 
@@ -2183,8 +2600,59 @@ def execute_batched_deletes(client, records, inventory, filters, args, reporter,
             local = PimInventory(client, inventory.selection, reporter, assume_no_pim=inventory.assume_no_pim)
             return delete_with_intent(client, record, local, filters, args, reporter, request_id, stop)
 
+    def record_outcomes(outcomes):
+        nonlocal checked, reported_failure
+        journal.append_many(outcome.journal_entry() for outcome in outcomes)
+        for outcome in outcomes:
+            if outcome.status in ("deleted", "skipped", "failed"):
+                counts[outcome.status] += 1
+            counts["pim_failed"] += int(outcome.pim_failed)
+            if (outcome.status == "failed" or outcome.pim_failed) and not reported_failure:
+                detail = outcome.detail or "Temporary PIM Owner eligibility cleanup failed."
+                reporter.emit("STOP: {}. In-flight operations finished; no further batch will start.".format(detail))
+                reported_failure = True
+        checked += len(outcomes)
+        reporter.progress("Delete outcomes", checked, len(records))
+
+    if not args.convert_last_owner_to_eligible:
+        with ThreadPoolExecutor(max_workers=args.delete_workers) as pool:
+            for batch in deletion_batches(records, args.delete_batch_size):
+                if stop.is_set():
+                    break
+                requests = [(record, str(uuid.uuid4()) if record.route != "rbac" else None) for record in batch]
+                journal.append_many(("delete_intent", {"key": record.key, "requestId": request_id})
+                                    for record, request_id in requests)
+                if batch[0].route == "rbac":
+                    complete = False
+                    try:
+                        futures = [pool.submit(remove_regular, record, request_id) for record, request_id in requests]
+                        outcomes = [future.result() for future in as_completed(futures)]
+                        complete = True
+                    finally:
+                        if not complete:
+                            stop.set()
+                else:
+                    outcomes = [delete_with_intent(client, record, inventory, filters, args, reporter, request_id, stop)
+                                for record, request_id in requests]
+                record_outcomes(outcomes)
+        return counts["deleted"], counts["skipped"], counts["failed"], counts["pim_failed"]
+
+    owner_records = [record for record in records if is_subscription_owner_record(record)]
+    eligibility_records = [record for record in records if record.route == "eligibility"]
+    special_keys = {record.key for record in owner_records + eligibility_records}
+    primary_records = [record for record in records if record.key not in special_keys]
+
+    def remove_owner(record):
+        with owner_limits[subscription_work_key(record)]:
+            if stop.is_set():
+                return DeleteOutcome(record.key, "unprocessed", "delete_skipped", "Canceled after another failure; no mutation attempted.")
+            local = PimInventory(client, inventory.selection, reporter, assume_no_pim=inventory.assume_no_pim)
+            return execute_serial_delete(
+                client, record, local, filters, args, reporter, journal, stop, intent_written=True,
+            )
+
     with ThreadPoolExecutor(max_workers=args.delete_workers) as pool:
-        for batch in deletion_batches(records, args.delete_batch_size):
+        for batch in deletion_batches(primary_records, args.delete_batch_size):
             if stop.is_set():
                 break
             requests = [(record, str(uuid.uuid4()) if record.route != "rbac" else None) for record in batch]
@@ -2202,16 +2670,38 @@ def execute_batched_deletes(client, records, inventory, filters, args, reporter,
             else:
                 outcomes = [delete_with_intent(client, record, inventory, filters, args, reporter, request_id, stop)
                             for record, request_id in requests]
-            journal.append_many(outcome.journal_entry() for outcome in outcomes)
-            for outcome in outcomes:
-                if outcome.status in counts:
-                    counts[outcome.status] += 1
-                if outcome.status == "failed" and not reported_failure:
-                    reporter.emit("STOP: {}. In-flight operations finished; no further batch will start.".format(outcome.detail))
-                    reported_failure = True
-            checked += len(outcomes)
-            reporter.progress("Delete outcomes", checked, len(records))
-    return counts["deleted"], counts["skipped"], counts["failed"]
+            record_outcomes(outcomes)
+
+        if not stop.is_set():
+            for offset in range(0, len(owner_records), args.delete_batch_size):
+                batch = owner_records[offset:offset + args.delete_batch_size]
+                requests = [(record, None) for record in batch]
+                journal.append_many(("delete_intent", {"key": record.key, "requestId": None})
+                                    for record, _ in requests)
+                complete = False
+                try:
+                    futures = [pool.submit(remove_owner, record) for record, _ in requests]
+                    outcomes = [future.result() for future in as_completed(futures)]
+                    complete = True
+                finally:
+                    if not complete:
+                        stop.set()
+                record_outcomes(outcomes)
+                if stop.is_set():
+                    break
+
+        if not stop.is_set():
+            for record in eligibility_records:
+                request_id = str(uuid.uuid4())
+                journal.append("delete_intent", key=record.key, requestId=request_id)
+                outcome = execute_serial_delete(
+                    client, record, inventory, filters, args, reporter, journal, stop,
+                    request_id=request_id, intent_written=True,
+                )
+                record_outcomes([outcome])
+                if stop.is_set():
+                    break
+    return counts["deleted"], counts["skipped"], counts["failed"], counts["pim_failed"]
 
 
 def execute_delete(client, args, reporter):
@@ -2219,8 +2709,12 @@ def execute_delete(client, args, reporter):
     args.rollback_blob_initial_verified = False
     if not 1 <= args.delete_workers <= 32 or not 1 <= args.delete_batch_size <= 500:
         raise SafetyError("--delete-workers must be 1-32 and --delete-batch-size must be 1-500.")
+    if args.convert_last_owner_to_eligible and args.assume_no_pim:
+        raise SafetyError("--convert-last-owner-to-eligible requires PIM reads and cannot be combined with --assume-no-pim.")
     if args.use_pim_for_owner_removal and args.assume_no_pim:
         raise SafetyError("--use-pim-for-owner-removal cannot be combined with --assume-no-pim.")
+    if args.convert_last_owner_to_eligible and args.assignment_kind is None:
+        args.assignment_kind = ["regular", "pim-eligible"]
     selection = scope_from_args(args)
     filters = FilterSpec.from_args(args)
     path = journal_path(args)
@@ -2229,6 +2723,8 @@ def execute_delete(client, args, reporter):
         raise JournalError("Blob rollback snapshot is mandatory; configure --rollback-blob-sas-url-env before delete or dry-run.")
     reporter.emit("Tenant: {} | Cloud: {} | Mode: {}".format(client.tenant, client.cloud, "APPLY" if args.apply else "DRY RUN"))
     reporter.emit("Scope: " + selection.root)
+    if args.convert_last_owner_to_eligible:
+        reporter.emit("Last Owner PIM conversion enabled: the direct subscription Owner set is rechecked immediately before each Active Owner deletion.")
     records, inventory = discover_records(client, selection, filters, args.source, reporter, args.read_workers, args.assume_no_pim)
     if args.include_user_details:
         resolve_user_details(client, records, reporter)
@@ -2276,6 +2772,7 @@ def execute_delete(client, args, reporter):
                        selection=scope_document(selection), filters=asdict(filters), source=args.source,
                        pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified",
                        pimOwnerRemoval=args.use_pim_for_owner_removal,
+                       pimLastOwnerConversion=args.convert_last_owner_to_eligible,
                        blobBackupEnabled=blob_backup is not None,
                        temporaryPimAccess=[{"scope": access.eligibility.scope, "eligibilityId": access.eligibility.identifier,
                                             "roleDefinitionId": access.eligibility.properties["roleDefinitionId"],
@@ -2327,40 +2824,33 @@ def execute_delete(client, args, reporter):
             if args.delete_workers > 1 and not pim_failed:
                 reporter.emit("Parallel RBAC deletion: workers={}, per-subscription<=4, batch={}; PIM remains serial.".format(
                     args.delete_workers, args.delete_batch_size))
-                deleted, skipped, failed = execute_batched_deletes(client, actionable, inventory, filters, args, reporter, journal)
+                batched_deleted, batched_skipped, batched_failed, batched_pim_failed = execute_batched_deletes(
+                    client, actionable, inventory, filters, args, reporter, journal)
+                deleted += batched_deleted
+                skipped += batched_skipped
+                failed += batched_failed
+                pim_failed += batched_pim_failed
+            delete_stop = threading.Event()
             for index, record in enumerate(actionable if args.delete_workers == 1 else [], 1):
                 if pim_failed:
                     break
-                intent_written = False
-                try:
-                    current = refresh_record(client, record, inventory, filters)
-                    if current is None:
-                        skipped += 1
-                        journal.append("delete_skipped", key=record.key, reason="Already missing/expired before mutation.")
-                        continue
-                    if record.route == "eligibility" and fresh_linked_activations(client, record, reporter):
-                        raise SafetyError("A linked activation is still present; no eligibility removal attempted.")
-                    request_id = str(uuid.uuid4()) if record.route != "rbac" else None
-                    journal.append("delete_intent", key=record.key, requestId=request_id)
-                    intent_written = True
-                    if record.route == "rbac":
-                        client.request("DELETE", api_path(record.identifier, RBAC_API))
-                    else:
-                        endpoint = request_path(record, request_id)
-                        client.request("PUT", endpoint, pim_remove_body(record))
-                        wait_pim_request(client, endpoint, args.poll_timeout, reporter)
-                    wait_removed(client, record, args.poll_timeout)
-                    journal.append("delete_success", key=record.key)
+                outcome = execute_serial_delete(
+                    client, record, inventory, filters, args, reporter, journal, delete_stop,
+                )
+                event, data = outcome.journal_entry()
+                journal.append(event, **data)
+                if outcome.status == "deleted":
                     deleted += 1
-                    reporter.progress("Deleted", index, len(actionable))
-                except JournalError:
-                    raise
-                except (SafetyError, OSError) as error:
+                elif outcome.status == "skipped":
+                    skipped += 1
+                elif outcome.status == "failed":
                     failed += 1
-                    known_rejection = isinstance(error, ApiError) and error.status in (400, 401, 403, 404, 409, 422, 429)
-                    event = "delete_uncertain" if intent_written and not known_rejection else "delete_failure"
-                    journal.append(event, key=record.key, error=str(error))
-                    reporter.emit("STOP: " + str(error))
+                if outcome.pim_failed:
+                    pim_failed += 1
+                if outcome.status == "failed":
+                    reporter.emit("STOP: " + outcome.detail)
+                    break
+                if outcome.pim_failed:
                     break
         except JournalError:
             journal_healthy = False
@@ -2413,7 +2903,10 @@ def journal_state(rows):
     selection = scope_from_document(header.get("selection"))
     snapshots, states = {}, {}
     complete = False
-    metadata_events = {"header", "journal_recovery", "canceled", "delete_summary", "rollback_summary"} | PIM_ACCESS_EVENTS
+    metadata_events = (
+        {"header", "journal_recovery", "canceled", "delete_summary", "rollback_summary"}
+        | PIM_ACCESS_EVENTS | PIM_OWNER_ELIGIBILITY_EVENTS
+    )
     for row in rows:
         event = row.get("event")
         if event == "snapshot":
@@ -2616,6 +3109,7 @@ def execute_rollback(args, reporter, client=None):
         if header.get("blobBackupEnabled") and blob_backup is None:
             reporter.emit("WARNING: Original deletion used Blob backup; this rollback is local-only unless --rollback-blob-sas-url-env is supplied.")
         pim_pending = pending_pim_access(rows)
+        pim_owner_pending = pending_pim_owner_eligibility(rows)
         if header.get("pimCheck") == "operator-asserted-absent":
             reporter.emit("WARNING: The original deletion used --assume-no-pim; its PIM exclusion was not independently verified.")
         if journal.trailing_bytes:
@@ -2626,6 +3120,8 @@ def execute_rollback(args, reporter, client=None):
         if args.tenant_id and args.tenant_id.casefold() != client.tenant:
             raise SafetyError("--tenant-id does not match the authenticated context.")
         pim_unresolved = check_pim_cleanup(client, pim_pending, selection, reporter)
+        pim_owner_unresolved = check_pending_pim_owner_eligibility(client, pim_owner_pending, selection, reporter)
+        pim_unresolved += len(pim_owner_unresolved)
         live_selection = selection
         if selection.kind == "management-group":
             live_selection = resolve_scope(client, ScopeSelection("management-group", selection.root, management_groups={selection.root}))
@@ -2634,6 +3130,9 @@ def execute_rollback(args, reporter, client=None):
         for key, record in snapshots.items():
             state = states[key]
             if state["deletion"] not in ("deleted", "pending"):
+                continue
+            if key in pim_owner_unresolved or "*" in pim_owner_unresolved:
+                reporter.emit("PENDING: Temporary Eligible Owner must be cleaned or expire before restoring " + record.identifier)
                 continue
             if not selection.contains(record.scope) or not live_selection.contains(record.scope):
                 raise SafetyError("A restore target is no longer inside the original scope hierarchy.")
@@ -2893,6 +3392,8 @@ def matches_filters(properties, filters, kind="regular", principal=None, end=Non
         return False
     description = properties.get("description")
     if description is None:
+        if kind == "pim-eligible" and filters.description_not_contains:
+            return False
         description = ""
     if (filters.description_contains or filters.description_not_contains) and not isinstance(description, str):
         raise SafetyError("Role Assignment Description is not a string; cannot evaluate the requested filters.")
@@ -3017,6 +3518,8 @@ def build_parser():
                         help="Durable intent/result batch size with parallel mode (1-500, default: 100).")
     delete.add_argument("--allow-nonrestorable-pim", action="store_true")
     delete.add_argument("--allow-self-removal", action="store_true")
+    delete.add_argument("--convert-last-owner-to-eligible", action="store_true",
+                        help="For a last direct subscription User Owner, create bounded PIM eligibility, try Active removal, then clean it up; Azure's last-Owner policy still applies.")
     delete.add_argument("--use-pim-for-owner-removal", action="store_true",
                         help="Temporarily activate the caller's existing subscription Eligible Owner/UAA, then deactivate. Never creates eligibility.")
     delete.add_argument("--assume-no-pim", action="store_true",
@@ -3051,7 +3554,7 @@ def main(argv=None):
         return 1
 
 
-AUTOMATION_CORE_SHA256 = '7ea2fe716b2dc3ddb1ac4de3cdca5155a0692a3af61b8414f2b90e66db393894'
+AUTOMATION_CORE_SHA256 = '65abda41bfe9596263dedd42b156295f4f9ef5df74d21a3beb8ce7e6989a96ac'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
@@ -3063,6 +3566,8 @@ AUTOMATION_PARAMETER_TYPES = {
     "management_group": str,
     "dry_run": bool,
     "assume_no_pim": bool,
+    "include_pim_eligible": bool,
+    "convert_last_owner_to_eligible": bool,
     "save_output": bool,
     "confirm_apply": str,
     "backup_container_sas_url": str,
@@ -3082,10 +3587,13 @@ def automation_default_configuration():
         "arguments": [
             "delete", "--management-group", "KT_GPU", "--subscriptions-only", "--principal-type", "User",
             "--exclude-custom-role-name-prefix", "(KT", "--description-not-contains", "[SNOW_AUTO]",
-            "--assignment-kind", "regular", "--read-workers", "8", "--delete-workers", "16",
+            "--assignment-kind", "regular", "--assignment-kind", "pim-eligible",
+            "--convert-last-owner-to-eligible", "--read-workers", "8", "--delete-workers", "16",
             "--source", "arg", "--dry-run",
         ],
         "assume_no_pim": False,
+        "include_pim_eligible": True,
+        "convert_last_owner_to_eligible": True,
         "confirm_apply": None,
         "backup_container_sas_variable": None,
         "backup_container_sas_env": None,
@@ -3385,11 +3893,11 @@ def automation_configuration(argv):
 def automation_main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv == ["--help"]:
-        print("No parameters: KT_GPU subscriptions-only User regular ARG dry-run; preserves (KT Custom Roles and [SNOW_AUTO] descriptions.")
+        print("No parameters: KT_GPU subscriptions-only User regular+PIM-eligible ARG dry-run; converts the last direct Active Owner through bounded PIM eligibility.")
         print("Enter one name=value in each positional parameter, e.g. management_group=KT_GPU and dry_run=true. Order is irrelevant.")
         print("JSON and config-variable input are not supported. Input values are never logged.")
         print("command=delete (default) or command=rollback; dry_run=true (default) or dry_run=false.")
-        print("assume_no_pim=true skips PIM reads only when an operator independently verified no PIM assignments exist in the entire selected scope.")
+        print("assume_no_pim=true requires include_pim_eligible=false and convert_last_owner_to_eligible=false and independently verified no PIM assignments.")
         print("Every delete run, including dry-run, requires a read/write container SAS and stores a verified JSONL rollback snapshot.")
         print("Apply requires dry_run=false and confirm_apply=DELETE or RESTORE.")
         print("Container SAS source: backup_container_sas_url, backup_container_sas_variable or backup_container_sas_env (exactly one).")
@@ -3425,7 +3933,10 @@ def automation_main(argv=None):
         if command == "rollback":
             if config.get("assume_no_pim", False):
                 raise SafetyError("assume_no_pim is available for command=delete only.")
-            if specified.intersection(("management_group", "read_workers", "delete_workers", "delete_batch_size")):
+            if specified.intersection((
+                "management_group", "read_workers", "delete_workers", "delete_batch_size",
+                "include_pim_eligible", "convert_last_owner_to_eligible",
+            )):
                 raise SafetyError("Rollback uses its journal scope and serial restoration; management_group and worker overrides are delete-only.")
             arguments = ["rollback", "--dry-run"]
             if config.get("reconcile_pending", False):
@@ -3433,13 +3944,22 @@ def automation_main(argv=None):
         else:
             if config.get("reconcile_pending", False):
                 raise SafetyError("reconcile_pending is available only with command=rollback.")
-            arguments = config["arguments"]
+            arguments = list(config["arguments"])
             if "management_group" in config:
                 arguments[arguments.index("--management-group") + 1] = config["management_group"]
+            if not config["include_pim_eligible"]:
+                index = arguments.index("pim-eligible") - 1
+                del arguments[index:index + 2]
+            if not config["convert_last_owner_to_eligible"]:
+                arguments.remove("--convert-last-owner-to-eligible")
             for name in ("read_workers", "delete_workers", "delete_batch_size"):
                 if name in config:
                     arguments.extend(["--" + name.replace("_", "-"), str(config[name])])
             if config.get("assume_no_pim", False):
+                if config["include_pim_eligible"] or config["convert_last_owner_to_eligible"]:
+                    raise SafetyError(
+                        "assume_no_pim requires include_pim_eligible=false and convert_last_owner_to_eligible=false."
+                    )
                 arguments.append("--assume-no-pim")
         arguments[arguments.index("--dry-run")] = "--dry-run" if config.get("dry_run", True) else "--apply"
         directory = pathlib.Path(tempfile.mkdtemp(prefix="rbac-automation-"))
@@ -3484,8 +4004,10 @@ def automation_main(argv=None):
             print("Required rollback Blob target: " + urllib.parse.urlunsplit(
                 (parsed_target.scheme, parsed_target.netloc, parsed_target.path, "", "")), flush=True)
         if args.command == "delete":
-            print("Using Runbook default arguments: {} | User | regular | ARG | {}.".format(
-                args.management_group, "APPLY" if args.apply else "DRY RUN"), flush=True)
+            print("Using Runbook arguments: {} | User | {} | ARG | last-owner conversion={} | {}.".format(
+                args.management_group, "+".join(args.assignment_kind),
+                "enabled" if args.convert_last_owner_to_eligible else "disabled",
+                "APPLY" if args.apply else "DRY RUN"), flush=True)
         else:
             print("Runbook rollback | {} | scope from journal.".format("APPLY" if args.apply else "DRY RUN"), flush=True)
         client = AutomationRestClient(tenant, args.timeout, Reporter(args.verbose))
