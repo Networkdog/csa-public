@@ -2622,6 +2622,21 @@ AUTOMATION_CORE_SHA256 = 'c07dc176c0a42df3c73ca1dbe7712fb98e665602177bbd4455e2cd
 import tempfile
 
 
+def automation_default_configuration():
+    return {
+        "tenant_id": "e6c9ec09-8430-4a99-bf15-242bc089b409",
+        "arguments": [
+            "delete", "--management-group", "KT_GPU", "--subscriptions-only", "--principal-type", "User",
+            "--exclude-custom-role-name-prefix", "(KT", "--description-not-contains", "[SNOW_AUTO]",
+            "--assignment-kind", "regular", "--allow-nonrestorable-pim", "--source", "arg", "--dry-run",
+        ],
+        "confirm_apply": None,
+        "backup_container_sas_variable": None,
+        "backup_container_sas_env": None,
+        "restore_blob_name": None,
+    }
+
+
 class AutomationRestClient(AzureRestClient):
     def __init__(self, tenant_id, timeout=60, reporter=None):
         self.timeout = timeout
@@ -2710,6 +2725,20 @@ class AutomationRestClient(AzureRestClient):
             return token
 
 
+def automation_variable_value(name):
+    if not isinstance(name, str) or not name.strip():
+        raise SafetyError("Invalid Automation variable name.")
+    try:
+        import automationassets
+        from automationassets import AutomationAssetNotFound
+    except ImportError:
+        raise SafetyError("The runtime needs automationassets to read Automation variables.") from None
+    try:
+        return automationassets.get_automation_variable(name)
+    except AutomationAssetNotFound:
+        raise SafetyError("The requested Automation variable was not found.") from None
+
+
 def automation_container_secret(config):
     asset = config.get("backup_container_sas_variable")
     environment = config.get("backup_container_sas_env")
@@ -2722,17 +2751,7 @@ def automation_container_secret(config):
             raise SafetyError("Invalid container SAS environment variable name.") from None
         value = os.environ.get(environment)
     else:
-        if not isinstance(asset, str) or not asset.strip():
-            raise SafetyError("Invalid Automation SAS variable name.")
-        try:
-            import automationassets
-            from automationassets import AutomationAssetNotFound
-        except ImportError:
-            raise SafetyError("The runtime needs automationassets for encrypted variables, or an explicitly configured SAS environment variable.") from None
-        try:
-            value = automationassets.get_automation_variable(asset)
-        except AutomationAssetNotFound:
-            raise SafetyError("The encrypted Automation SAS variable was not found.") from None
+        value = automation_variable_value(asset)
     if not isinstance(value, str) or not value:
         raise SafetyError("The configured container SAS is empty or is not a string.")
     return value
@@ -2785,11 +2804,63 @@ def automation_download_journal(url, path, timeout):
         raise SafetyError("Rollback Blob download failed or exceeded 256 MiB. SAS details suppressed.") from None
 
 
+def automation_configuration(argv):
+    if any(not isinstance(value, str) for value in argv):
+        raise SafetyError("Runbook positional arguments must be strings; input values are not logged.")
+    parts = [value for value in argv if value.strip()]
+    hint = "Use config-variable:RbacCleanupConfig and store the JSON in that Automation variable."
+    if not parts:
+        return {}
+    prefix = "config-variable:"
+    if parts[0].strip().startswith(prefix):
+        name = parts[0].strip()[len(prefix):]
+        if len(parts) != 1 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}", name):
+            raise SafetyError("Pass a single config-variable:NAME without spaces or additional arguments.")
+        payload = automation_variable_value(name)
+        if isinstance(payload, dict):
+            return payload
+        if not isinstance(payload, str) or not payload.strip():
+            raise SafetyError("The Automation configuration variable must contain a JSON object or JSON string.")
+    else:
+        inside_string = escaped = False
+        for index, part in enumerate(parts):
+            for character in part:
+                if escaped:
+                    escaped = False
+                elif character == "\\" and inside_string:
+                    escaped = True
+                elif character == '"':
+                    inside_string = not inside_string
+            if inside_string and index < len(parts) - 1:
+                raise SafetyError("A JSON string was split across positional arguments; its original spaces cannot be verified. " + hint)
+        payload = " ".join(parts)
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate configuration field")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(payload, object_pairs_hook=unique_fields)
+    except ValueError:
+        raise SafetyError(
+            "Invalid or ambiguous JSON configuration (positional arguments: {}). "
+            "Automation may split spaces or remove quotes. ".format(len(argv)) + hint
+        ) from None
+
+
 def automation_main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv == ["--help"]:
-        print("Pass one JSON parameter: tenant_id, arguments (CLI string array), optional backup_container_sas_variable/env and restore_blob_name.")
-        print("Dry run is the default. Apply also requires confirm_apply=DELETE or RESTORE and a read/write container SAS.")
+        print("No parameters: KT_GPU subscriptions-only User regular ARG dry-run; preserves (KT Custom Roles and [SNOW_AUTO] descriptions.")
+        print("Override defaults with config-variable:RbacCleanupConfig (JSON stored in an Automation variable).")
+        print("Direct JSON is also supported when quotes and string values are preserved. Input values are never logged.")
+        print("JSON fields: tenant_id, arguments (CLI string array), optional backup_container_sas_variable/env and restore_blob_name.")
+        print("Omitted JSON fields use automation_default_configuration(); an explicit arguments array replaces all default CLI arguments.")
+        print("Apply always requires --apply, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
         return 0
     internal_sas = "RBAC_AUTOMATION_JOURNAL_SAS_URL"
     previous_sas = os.environ.get(internal_sas)
@@ -2797,20 +2868,17 @@ def automation_main(argv=None):
     output = None
     preserve_recovery = False
     try:
-        if len(argv) != 1:
-            raise SafetyError("Pass exactly one non-secret JSON configuration parameter.")
-        try:
-            config = json.loads(argv[0])
-        except (ValueError, TypeError):
-            raise SafetyError("Runbook configuration must be a JSON object.") from None
+        config = automation_configuration(argv)
         fields = {"tenant_id", "arguments", "confirm_apply", "backup_container_sas_variable",
                   "backup_container_sas_env", "restore_blob_name"}
         if not isinstance(config, dict) or set(config) - fields:
             raise SafetyError("Runbook configuration contains unsupported fields.")
+        default_arguments = "arguments" not in config
+        config = dict(automation_default_configuration(), **config)
         try:
             tenant = guid(config.get("tenant_id"))
         except (argparse.ArgumentTypeError, TypeError):
-            raise SafetyError("Runbook tenant_id must be an explicit tenant GUID.") from None
+            raise SafetyError("Runbook tenant_id must be a valid tenant GUID.") from None
         arguments = config.get("arguments")
         if (not isinstance(arguments, list) or not arguments or arguments[0] not in ("delete", "rollback")
                 or any(not isinstance(value, str) for value in arguments)):
@@ -2846,6 +2914,8 @@ def automation_main(argv=None):
             url = automation_blob_url(container, name)
             os.environ[internal_sas] = url
             args.rollback_blob_sas_url_env = internal_sas
+        if default_arguments:
+            print("Using Runbook default arguments: KT_GPU | User | regular | ARG | DRY RUN.", flush=True)
         client = AutomationRestClient(tenant, args.timeout, Reporter(args.verbose))
         client.reporter.emit("Automation cleanup core: " + AUTOMATION_CORE_SHA256)
         if args.command == "rollback":
