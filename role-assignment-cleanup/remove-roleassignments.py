@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
@@ -315,6 +315,46 @@ def validate_assignment(raw, collection="roleAssignments"):
     ) or any(character in definition for character in "?#\\%"):
         raise SafetyError("Missing/invalid roleDefinitionId.")
     return scope
+
+
+def role_definition_guid(identifier):
+    match = re.fullmatch(
+        r"(.*)/providers/microsoft\.authorization/roledefinitions/([0-9a-f-]{36})",
+        identifier if isinstance(identifier, str) else "", re.IGNORECASE,
+    )
+    if not match:
+        raise SafetyError("Invalid role definition ARM ID.")
+    if match[1]:
+        normalize_scope(match[1])
+    try:
+        return str(uuid.UUID(match[2]))
+    except ValueError as error:
+        raise SafetyError("Invalid role definition GUID.") from error
+
+
+def validate_role_definition(raw, identifier):
+    if not isinstance(raw, dict) or not isinstance(raw.get("properties"), dict):
+        raise SafetyError("Cannot evaluate Custom Role exclusions without a resolved role definition.")
+    if role_definition_guid(raw.get("id")) != role_definition_guid(identifier):
+        raise SafetyError("ARM returned a different role definition than requested.")
+    properties = raw["properties"]
+    if (properties.get("type") not in ("CustomRole", "BuiltInRole")
+            or not isinstance(properties.get("roleName"), str) or not properties["roleName"].strip()):
+        raise SafetyError("Role definition is missing a valid roleName/type; Custom Role exclusion cannot be evaluated.")
+    return properties
+
+
+def resolve_role_definitions(client, properties_list, reporter):
+    identifiers = sorted({properties["roleDefinitionId"].casefold() for properties in properties_list})
+    definitions = {}
+    for index, identifier in enumerate(identifiers, 1):
+        role_definition_guid(identifier)
+        raw = client.request("GET", api_path(identifier, RBAC_API))
+        role = validate_role_definition(raw, identifier)
+        definitions[identifier] = raw
+        reporter.detail("Role definition: {} | {} | {}".format(identifier, role["type"], role["roleName"]))
+        reporter.progress("Role definitions resolved", index, len(identifiers))
+    return definitions
 
 
 def get_subscription_name(client, identifier):
@@ -1063,8 +1103,9 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
         reporter.emit("Subscriptions matching display-name filter: {}.".format(len(selection.subscriptions)))
         for identifier, name in sorted(selection.subscription_names.items()):
             reporter.emit("Subscription: {} | {}".format(name, identifier))
-        if not selection.subscriptions:
-            return [], PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
+    if (selection.subscription_name_contains or selection.subscriptions_only) and not selection.subscriptions:
+        reporter.emit("No subscriptions inside the selected scope; Azure mutations=0.")
+        return [], PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
     candidates = arg_assignments(client, selection, filters, reporter) if source == "arg" else arm_assignments(client, selection)
     identifiers = sorted({raw["id"] for raw in candidates if selection.contains(entity_scope(raw["id"], "roleAssignments"))})
     reporter.emit("RBAC candidates: {}. Reading live properties and PIM state.".format(len(identifiers)))
@@ -1115,9 +1156,16 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
         principals = resolve_principals(client, [record.properties for record in filtered], reporter)
         for record in filtered:
             record.principal = principals.get(record.properties["principalId"].casefold(), {})
+    property_filters = replace(filters, exclude_custom_role_name_prefix=())
     matched = [record for record in filtered if matches_filters(
-        record.properties, filters, record.kind, record.principal, record.end,
+        record.properties, property_filters, record.kind, record.principal, record.end,
     )]
+    if filters.exclude_custom_role_name_prefix:
+        definitions = resolve_role_definitions(client, [record.properties for record in matched], reporter)
+        matched = [record for record in matched if matches_filters(
+            record.properties, filters, record.kind, record.principal, record.end,
+            definitions[record.properties["roleDefinitionId"].casefold()],
+        )]
     reporter.emit("Matched: {}. Excluded by kind/filters: {}.".format(len(matched), len(records) - len(matched)))
     return matched, inventory
 
@@ -1128,6 +1176,7 @@ def scope_document(selection):
         "management_groups": sorted(selection.management_groups), "subscriptions": sorted(selection.subscriptions),
         "subscription_name_contains": list(selection.subscription_name_contains),
         "subscription_names": dict(selection.subscription_names),
+        "subscriptions_only": selection.subscriptions_only,
     }
 
 
@@ -1141,6 +1190,9 @@ def scope_from_document(value):
             raise ValueError("Scope kind/root mismatch")
         if not isinstance(value["include_children"], bool):
             raise ValueError("Invalid descendant setting")
+        subscriptions_only = value.get("subscriptions_only", False)
+        if not isinstance(subscriptions_only, bool) or (subscriptions_only and kind != "management-group"):
+            raise ValueError("Invalid subscriptions-only scope setting")
         keywords = value.get("subscription_name_contains", [])
         names = value.get("subscription_names", {})
         if (not isinstance(keywords, list) or any(not isinstance(item, str) or not item.strip() for item in keywords)
@@ -1154,7 +1206,7 @@ def scope_from_document(value):
             raise ValueError("Subscription names do not match the recorded selection")
         return ScopeSelection(kind, root, value["include_children"],
                               {normalize_scope(item) for item in value["management_groups"]},
-                              subscriptions, tuple(keywords), names)
+                              subscriptions, tuple(keywords), names, subscriptions_only)
     except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError) as error:
         raise SafetyError("Malformed scope in rollback journal.") from error
 
@@ -1261,7 +1313,11 @@ def refresh_record(client, record, inventory, filters=None):
     if filters and filters.needs_directory():
         resolved = resolve_principals(client, [current.properties], inventory.reporter)
         current.principal = resolved[current.properties["principalId"].casefold()]
-    if filters and not matches_filters(current.properties, filters, current.kind, current.principal, current.end):
+    definition = None
+    if filters and filters.exclude_custom_role_name_prefix:
+        definitions = resolve_role_definitions(client, [current.properties], inventory.reporter)
+        definition = definitions[current.properties["roleDefinitionId"].casefold()]
+    if filters and not matches_filters(current.properties, filters, current.kind, current.principal, current.end, definition):
         raise SafetyError("Assignment no longer matches the requested filters.")
     return current
 
@@ -2056,12 +2112,13 @@ class ScopeSelection:
     subscriptions: set = field(default_factory=set)
     subscription_name_contains: tuple = ()
     subscription_names: dict = field(default_factory=dict)
+    subscriptions_only: bool = False
 
     def contains(self, scope):
         if scope == "/":
             return False
         scope = normalize_scope(scope)
-        if self.subscription_name_contains:
+        if self.subscription_name_contains or self.subscriptions_only:
             if not scope.startswith("/subscriptions/") or scope.split("/")[2] not in self.subscriptions:
                 return False
         if self.kind == "management-group":
@@ -2072,7 +2129,7 @@ class ScopeSelection:
 
     def read_scopes(self):
         if self.kind == "management-group":
-            groups = [] if self.subscription_name_contains else sorted(self.management_groups)
+            groups = [] if self.subscription_name_contains or self.subscriptions_only else sorted(self.management_groups)
             return groups + ["/subscriptions/" + item for item in sorted(self.subscriptions)]
         if self.subscription_name_contains and not self.subscriptions:
             return []
@@ -2108,19 +2165,24 @@ def scope_from_args(args):
         result = ScopeSelection("resource", root, args.include_resource_descendants)
     if args.include_resource_descendants and not args.resource_id:
         raise SafetyError("--include-resource-descendants requires --resource-id.")
+    if args.subscriptions_only and not args.management_group:
+        raise SafetyError("--subscriptions-only requires --management-group.")
     result.subscription_name_contains = tuple(args.subscription_name_contains or ())
+    result.subscriptions_only = args.subscriptions_only
     return result
 
 
 @dataclass
 class FilterSpec:
     description_contains: tuple = ()
+    description_not_contains: tuple = ()
     principal_id: tuple = ()
     principal_type: tuple = ()
     principal_name: tuple = ()
     principal_name_contains: tuple = ()
     principal_email: tuple = ()
     role_id: tuple = ()
+    exclude_custom_role_name_prefix: tuple = ()
     assignment_kind: tuple = ("regular",)
     expiration: str = "any"
 
@@ -2138,7 +2200,7 @@ class FilterSpec:
                     or {"ServicePrincipal", "ManagedIdentity"}.intersection(self.principal_type))
 
 
-def matches_filters(properties, filters, kind="regular", principal=None, end=None):
+def matches_filters(properties, filters, kind="regular", principal=None, end=None, role_definition=None):
     if kind not in filters.assignment_kind:
         return False
     if filters.expiration != "any" and (end is not None) != (filters.expiration == "time-bound"):
@@ -2162,10 +2224,16 @@ def matches_filters(properties, filters, kind="regular", principal=None, end=Non
         value.casefold() for value in filters.principal_id
     }:
         return False
-    description = properties.get("description") or ""
+    description = properties.get("description")
+    if description is None:
+        description = ""
+    if (filters.description_contains or filters.description_not_contains) and not isinstance(description, str):
+        raise SafetyError("Role Assignment Description is not a string; cannot evaluate the requested filters.")
     if filters.description_contains and not any(
         value.casefold() in description.casefold() for value in filters.description_contains
     ):
+        return False
+    if any(value.casefold() in description.casefold() for value in filters.description_not_contains):
         return False
     name = principal.get("displayName") or ""
     if (filters.principal_name or filters.principal_name_contains) and not name:
@@ -2184,6 +2252,12 @@ def matches_filters(properties, filters, kind="regular", principal=None, end=Non
         emails = {str(principal.get(name) or "").casefold() for name in ("mail", "userPrincipalName")}
         if not emails.intersection(value.casefold() for value in filters.principal_email):
             return False
+    if filters.exclude_custom_role_name_prefix:
+        role = validate_role_definition(role_definition, properties.get("roleDefinitionId"))
+        if role["type"] == "CustomRole" and any(
+            role["roleName"].casefold().startswith(value.casefold()) for value in filters.exclude_custom_role_name_prefix
+        ):
+            return False
     return True
 
 
@@ -2199,7 +2273,7 @@ def build_arg_query(selection, filters):
         if selection.include_children:
             clause += " or assignmentScope startswith " + json.dumps(selection.root + "/")
         query.append("| where " + clause)
-    if selection.subscription_name_contains:
+    if selection.subscription_name_contains or selection.subscriptions_only:
         query.append("| where subscriptionId in~ (" + ", ".join(
             json.dumps(value) for value in sorted(selection.subscriptions)
         ) + ")")
@@ -2245,13 +2319,19 @@ def build_parser():
     roots.add_argument("--resource-id", type=nonempty)
     delete.add_argument("--subscription-name-contains", action="append", type=nonempty,
                         help="Subscription display-name substring; repeat for OR. Excludes management-group assignments.")
+    delete.add_argument("--subscriptions-only", action="store_true",
+                        help="With --management-group, include only descendant subscriptions/RGs/resources, not management-group assignments.")
     delete.add_argument("--resource-group", type=nonempty)
     delete.add_argument("--include-resource-descendants", action="store_true")
     for option in ("description-contains", "principal-name", "principal-name-contains", "principal-email"):
         delete.add_argument("--" + option, action="append", type=nonempty, help="Repeat for OR values.")
+    delete.add_argument("--description-not-contains", action="append", type=nonempty,
+                        help="Exclude assignments containing any of these Description substrings; repeat for OR exclusions.")
     delete.add_argument("--principal-id", action="append", type=guid)
     delete.add_argument("--principal-type", action="append", type=principal_type, choices=PRINCIPAL_TYPES)
     delete.add_argument("--role-id", action="append", type=guid, help="Role definition GUID; repeat for OR.")
+    delete.add_argument("--exclude-custom-role-name-prefix", action="append", type=nonempty,
+                        help="Exclude CustomRole names starting with any given literal prefix. BuiltInRole assignments remain eligible.")
     delete.add_argument("--assignment-kind", action="append", choices=KINDS, help="Default: regular only.")
     delete.add_argument("--expiration", choices=("any", "permanent", "time-bound"), default="any")
     delete.add_argument("--source", choices=("arg", "arm"), default="arg")
