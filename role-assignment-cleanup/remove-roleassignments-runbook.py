@@ -365,21 +365,24 @@ def validate_role_definition(raw, identifier):
     return properties
 
 
-def resolve_role_definitions(client, properties_list, reporter):
+def resolve_role_definitions(client, properties_list, reporter, workers=1):
     identifiers = sorted({properties["roleDefinitionId"].casefold() for properties in properties_list})
     definitions = {}
-    for index, identifier in enumerate(identifiers, 1):
-        raw = get_live_role_definition(client, identifier)
-        role = raw["properties"]
-        definitions[identifier] = raw
-        reporter.detail("Role definition: {} | {} | {}".format(identifier, role["type"], role["roleName"]))
-        reporter.progress("Role definitions resolved", index, len(identifiers))
+    if not identifiers:
+        return definitions
+    with ThreadPoolExecutor(max_workers=min(max(1, workers), len(identifiers))) as pool:
+        for index, (identifier, raw) in enumerate(
+                zip(identifiers, pool.map(lambda item: get_live_role_definition(client, item), identifiers)), 1):
+            definitions[identifier] = raw
+            role = raw["properties"]
+            reporter.detail("Role definition: {} | {} | {}".format(identifier, role["type"], role["roleName"]))
+            reporter.progress("Role definitions resolved", index, len(identifiers))
     return definitions
 
 
-def resolve_assignment_role_details(client, records, reporter):
+def resolve_assignment_role_details(client, records, reporter, workers=1):
     missing = [record for record in records if not record.role_name or not record.role_type]
-    definitions = resolve_role_definitions(client, [record.properties for record in missing], reporter)
+    definitions = resolve_role_definitions(client, [record.properties for record in missing], reporter, workers)
     for record in missing:
         role = definitions[record.properties["roleDefinitionId"].casefold()]["properties"]
         record.role_name = role["roleName"]
@@ -416,7 +419,7 @@ def verify_subscription_selection(client, selection, scope):
         raise SafetyError("Subscription display name changed after discovery; no mutation attempted.")
 
 
-def resolve_scope(client, selection):
+def resolve_scope(client, selection, workers=1):
     if selection.kind == "management-group":
         descendants = list(client.values(api_path(selection.root + "/descendants", MG_API)))
         parents = {}
@@ -442,11 +445,10 @@ def resolve_scope(client, selection):
             raise SafetyError("More than 10,000 subscriptions: run explicit smaller scopes; partial ARG scopes are not allowed.")
     if selection.subscription_name_contains:
         identifiers = sorted(selection.subscriptions) if selection.kind == "management-group" else [selection.root.split("/")[2]]
-        names = {}
-        for identifier in identifiers:
-            name = get_subscription_name(client, identifier)
-            if any(value.casefold() in name.casefold() for value in selection.subscription_name_contains):
-                names[identifier] = name
+        with ThreadPoolExecutor(max_workers=min(max(1, workers), max(1, len(identifiers)))) as pool:
+            resolved = pool.map(lambda identifier: get_subscription_name(client, identifier), identifiers)
+            names = {identifier: name for identifier, name in zip(identifiers, resolved)
+                     if any(value.casefold() in name.casefold() for value in selection.subscription_name_contains)}
         selection.subscriptions = set(names)
         selection.subscription_names = names
     return selection
@@ -939,7 +941,10 @@ def blob_backup_from_args(args, reporter):
     backup = BlobJournalBackup(sas_url, args.timeout)
     reporter.emit("Blob backup configured: " + backup.destination)
     if not args.apply:
-        reporter.emit("DRY RUN: Blob SAS format checked locally; no Blob requests or uploads.")
+        if args.require_blob_backup or getattr(args, "dry_run_rollback_file", None):
+            reporter.emit("DRY RUN: rollback plan Blob will be uploaded and verified after discovery.")
+        else:
+            reporter.emit("DRY RUN: Blob SAS format checked locally; no Blob requests or uploads.")
     return backup
 
 
@@ -1160,6 +1165,41 @@ def write_preview_csv(path, records, reporter):
     reporter.emit("CSV preview: {} | Unique matching principals: {}.".format(path, len(principals)))
 
 
+def write_dry_run_journal(path, client, selection, filters, args, records, actionable, blocked,
+                          pim_access, blob_backup, reporter):
+    path = pathlib.Path(path).expanduser().resolve()
+    with RollbackJournal(path, create=True) as journal:
+        journal.append("header", schemaVersion=1, runId=str(uuid.uuid4()), mode="dry-run",
+                       tenantId=client.tenant, cloud=client.cloud, callerId=client.actor_id,
+                       selection=scope_document(selection), filters=asdict(filters), source=args.source,
+                       pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified",
+                       pimOwnerRemoval=args.use_pim_for_owner_removal,
+                       blobBackupEnabled=blob_backup is not None,
+                       temporaryPimAccess=[{"scope": access.eligibility.scope,
+                                            "eligibilityId": access.eligibility.identifier,
+                                            "roleDefinitionId": access.eligibility.properties["roleDefinitionId"],
+                                            "reuse": access.reused} for access in pim_access])
+        journal.append_many(
+            ("snapshot", {"key": record.key, "record": record.snapshot(),
+                          "blockedReason": blocked.get(record.key)})
+            for record in records
+        )
+        journal.append("plan_complete", count=len(records), actionable=len(actionable))
+        journal.append("dry_run_summary", matched=len(records), removable=len(actionable), protected=len(blocked))
+        if blob_backup is not None:
+            journal.enable_blob_backup(blob_backup, create=True, verify=args.require_blob_backup)
+            if args.require_blob_backup:
+                args.rollback_blob_initial_verified = True
+                args.rollback_blob_verified = True
+                reporter.emit("Dry-run rollback plan persisted and verified: " + blob_backup.destination)
+            else:
+                reporter.emit("Dry-run rollback plan uploaded: " + blob_backup.destination)
+        else:
+            reporter.emit("Dry-run rollback plan saved locally only: " + str(path))
+    reporter.emit("Dry-run rollback plan: " + str(path))
+    return path
+
+
 def write_deleted_users_csv(journal_path, path):
     snapshots, role_details, users, intents, successful = {}, {}, {}, set(), set()
     complete = False
@@ -1287,20 +1327,25 @@ class PimInventory:
     def roots(self):
         return self.selection.read_scopes()
 
-    def load(self, scope, exact=False):
-        scope = normalize_scope(scope)
-        if self.assume_no_pim:
-            if exact:
-                self.exact_scopes.add(scope)
-            return
+    def collections(self):
         collections = [
             ("roleAssignmentSchedules", self.schedules),
             ("roleAssignmentScheduleInstances", self.instances),
         ]
         if self.include_eligible:
             collections.append(("roleEligibilitySchedules", self.eligibilities))
-        for collection, target in collections:
-            query = {"$filter": "atScope()"} if exact else {}
+        return collections
+
+    def read_scope(self, scope, exact=False, principal_id=None, candidate_scopes=None):
+        scope = normalize_scope(scope)
+        result = {}
+        target_scopes = None if candidate_scopes is None else set(candidate_scopes)
+        for collection, _ in self.collections():
+            query = {}
+            if exact:
+                query["$filter"] = "atScope()"
+            elif principal_id:
+                query["$filter"] = "principalId eq " + principal_id
             try:
                 rows = list(self.client.values(api_path(scope + "/providers/Microsoft.Authorization/" + collection, PIM_API, **query)))
             except ApiError as error:
@@ -1311,28 +1356,117 @@ class PimInventory:
                         "explicitly use --assume-no-pim for regular RBAC."
                     ) from error
                 raise
-            if exact:
-                for identifier in list(target):
-                    if normalize_scope(target[identifier]["properties"]["scope"]) == scope:
-                        del target[identifier]
+            selected = {}
             for raw in rows:
                 if raw.get("properties", {}).get("memberType") in ("Inherited", "Group"):
                     continue
                 actual_scope = validate_assignment(raw, collection)
                 if raw["properties"].get("memberType") != "Direct":
                     raise SafetyError("PIM memberType is missing/unknown; cannot prove this is a direct assignment.")
-                if not exact or actual_scope == scope:
-                    target[raw["id"].casefold()] = raw
+                principal = raw["properties"]["principalId"].casefold()
+                if exact and actual_scope != scope:
+                    continue
+                if principal_id and principal != principal_id:
+                    continue
+                if target_scopes is not None and actual_scope not in target_scopes:
+                    continue
+                selected[raw["id"].casefold()] = raw
+            result[collection] = selected
+        return scope, exact, result
+
+    def merge_scope(self, scope, exact, result):
+        targets = {
+            "roleAssignmentSchedules": self.schedules,
+            "roleAssignmentScheduleInstances": self.instances,
+            "roleEligibilitySchedules": self.eligibilities,
+        }
+        if exact:
+            for target in targets.values():
+                for identifier in list(target):
+                    if normalize_scope(target[identifier]["properties"]["scope"]) == scope:
+                        del target[identifier]
+        for collection, rows in result.items():
+            targets[collection].update(rows)
         if exact:
             self.exact_scopes.add(scope)
 
-    def load_hierarchy(self):
+    def load(self, scope, exact=False):
+        scope = normalize_scope(scope)
+        if self.assume_no_pim:
+            if exact:
+                self.exact_scopes.add(scope)
+            return
+        scope, exact, result = self.read_scope(scope, exact=exact)
+        self.merge_scope(scope, exact, result)
+
+    def load_scopes(self, scopes, exact=False, workers=1, progress_label=None):
+        scopes = sorted({normalize_scope(scope) for scope in scopes})
+        if self.assume_no_pim:
+            if exact:
+                self.exact_scopes.update(scopes)
+            return
+        if not scopes:
+            return
+        with ThreadPoolExecutor(max_workers=min(max(1, workers), len(scopes))) as pool:
+            results = pool.map(lambda scope: self.read_scope(scope, exact=exact), scopes)
+            for index, (scope, is_exact, result) in enumerate(results, 1):
+                self.merge_scope(scope, is_exact, result)
+                if progress_label:
+                    self.reporter.progress(progress_label, index, len(scopes))
+
+    def load_hierarchy(self, workers=1):
         if self.assume_no_pim:
             return
-        roots = self.roots()
-        for index, scope in enumerate(roots, 1):
-            self.load(scope)
-            self.reporter.progress("PIM inventory scopes", index, len(roots))
+        self.load_scopes(self.roots(), workers=workers, progress_label="PIM inventory scopes")
+
+    def load_candidates(self, assignments, workers=1):
+        candidate_scopes = set()
+        by_group = {}
+        for raw in assignments:
+            scope = validate_assignment(raw)
+            candidate_scopes.add(scope)
+            if (self.selection.kind == "management-group" and self.selection.subscriptions_only
+                    and scope.startswith("/subscriptions/")):
+                group = "/subscriptions/" + scope.split("/")[2]
+            else:
+                group = self.selection.root
+            group_data = by_group.setdefault(group, {"scopes": set(), "principals": {}})
+            group_data["scopes"].add(scope)
+            principal = raw["properties"]["principalId"].casefold()
+            group_data["principals"].setdefault(principal, set()).add(scope)
+        self.exact_scopes.update(candidate_scopes)
+        if self.assume_no_pim:
+            return
+        if not candidate_scopes:
+            self.reporter.emit("PIM candidate inventory: no regular RBAC candidates; PIM scope reads skipped.")
+            return
+        scope_queries = [(scope, None, {scope}) for scope in sorted(candidate_scopes)]
+        principal_queries = [
+            (group, principal, scopes)
+            for group, data in sorted(by_group.items())
+            for principal, scopes in sorted(data["principals"].items())
+        ]
+        if len(principal_queries) < len(scope_queries):
+            queries = principal_queries
+            strategy = "principalId"
+            exact = False
+        else:
+            queries = scope_queries
+            strategy = "exact-scope"
+            exact = True
+        self.reporter.emit("PIM candidate inventory: strategy={} | candidate scopes={} | filtered queries={}.".format(
+            strategy, len(candidate_scopes), len(queries)))
+        if exact:
+            self.load_scopes(candidate_scopes, exact=True, workers=workers, progress_label="Exact-scope PIM checks")
+            return
+        with ThreadPoolExecutor(max_workers=min(max(1, workers), len(queries))) as pool:
+            results = pool.map(
+                lambda item: self.read_scope(item[0], principal_id=item[1], candidate_scopes=item[2]),
+                queries,
+            )
+            for index, (scope, _, result) in enumerate(results, 1):
+                self.merge_scope(scope, False, result)
+                self.reporter.progress("PIM principal reads", index, len(queries))
 
     def instances_for(self, schedule):
         result = []
@@ -1460,7 +1594,7 @@ def collect_rbac_assignments(client, selection, filters, source, reporter, worke
 def discover_records(client, selection, filters, source, reporter, workers=4, assume_no_pim=False):
     if assume_no_pim and set(filters.assignment_kind) != {"regular"}:
         raise SafetyError("--assume-no-pim is only allowed with --assignment-kind regular.")
-    resolve_scope(client, selection)
+    resolve_scope(client, selection, workers=workers)
     if selection.subscription_name_contains:
         reporter.emit("Subscriptions matching display-name filter: {}.".format(len(selection.subscriptions)))
         for identifier, name in sorted(selection.subscription_names.items()):
@@ -1472,12 +1606,13 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
     inventory = PimInventory(client, selection, reporter, "pim-eligible" in filters.assignment_kind, assume_no_pim)
     if assume_no_pim:
         reporter.emit("WARNING: Operator asserted this scope contains no PIM assignments. PIM exclusion is NOT verified.")
-    inventory.load_hierarchy()
     exact_scopes = sorted({validate_assignment(raw) for raw in backing.values()})
-    for index, scope in enumerate(exact_scopes, 1):
-        inventory.load(scope, exact=True)
-        if not assume_no_pim:
-            reporter.progress("Exact-scope PIM checks", index, len(exact_scopes))
+    if set(filters.assignment_kind) == {"regular"}:
+        inventory.load_candidates(backing.values(), workers=workers)
+    else:
+        inventory.load_hierarchy(workers=workers)
+        inventory.load_scopes(exact_scopes, exact=True, workers=workers,
+                              progress_label="Exact-scope PIM checks")
     records = {}
     for raw in backing.values():
         record = inventory.classify(raw)
@@ -1515,7 +1650,7 @@ def discover_records(client, selection, filters, source, reporter, workers=4, as
         record.properties, property_filters, record.kind, record.principal, record.end,
     )]
     if filters.exclude_custom_role_name_prefix:
-        definitions = resolve_role_definitions(client, [record.properties for record in matched], reporter)
+        definitions = resolve_role_definitions(client, [record.properties for record in matched], reporter, workers)
         retained = []
         for record in matched:
             definition = definitions[record.properties["roleDefinitionId"].casefold()]
@@ -1647,11 +1782,11 @@ def wait_removed(client, record, timeout):
 
 def refresh_record(client, record, inventory, filters=None):
     verify_subscription_selection(client, inventory.selection, record.scope)
-    inventory.load(record.scope, exact=True)
     if record.route == "rbac":
         raw = get_live_assignment(client, record.identifier)
         if raw is None:
             return None
+        inventory.load(record.scope, exact=True)
         current = inventory.classify(raw)
     else:
         raw = client.get_optional(api_path(record.identifier, PIM_API))
@@ -1660,6 +1795,7 @@ def refresh_record(client, record, inventory, filters=None):
         validate_assignment(raw, collection_for_route(record.route))
         if raw["id"].casefold() != record.identifier.casefold():
             raise SafetyError("PIM returned an unexpected schedule ID.")
+        inventory.load(record.scope, exact=True)
         backing = get_live_assignment(client, record.rbac["id"]) if record.rbac else None
         current = inventory.from_schedule(raw, record.route, backing)
         if current is None:
@@ -2089,8 +2225,8 @@ def execute_delete(client, args, reporter):
     filters = FilterSpec.from_args(args)
     path = journal_path(args)
     blob_backup = blob_backup_from_args(args, reporter)
-    if args.apply and args.require_blob_backup and blob_backup is None:
-        raise JournalError("Blob rollback backup is mandatory; configure --rollback-blob-sas-url-env before applying.")
+    if args.require_blob_backup and blob_backup is None:
+        raise JournalError("Blob rollback snapshot is mandatory; configure --rollback-blob-sas-url-env before delete or dry-run.")
     reporter.emit("Tenant: {} | Cloud: {} | Mode: {}".format(client.tenant, client.cloud, "APPLY" if args.apply else "DRY RUN"))
     reporter.emit("Scope: " + selection.root)
     records, inventory = discover_records(client, selection, filters, args.source, reporter, args.read_workers, args.assume_no_pim)
@@ -2112,7 +2248,7 @@ def execute_delete(client, args, reporter):
     actionable.sort(key=lambda record: (record.route == "eligibility", -record.scope.count("/"), record.key))
     if args.apply and args.include_user_details:
         users = [record for record in actionable if record.properties.get("principalType") == "User"]
-        resolve_assignment_role_details(client, users, reporter)
+        resolve_assignment_role_details(client, users, reporter, args.read_workers)
     pim_access = plan_pim_owner_access(client, inventory, actionable, reporter) if args.use_pim_for_owner_removal else []
     reporter.emit("Removable: {} | Protected: {}".format(len(actionable), len(blocked)))
     for index, record in enumerate(records):
@@ -2123,6 +2259,12 @@ def execute_delete(client, args, reporter):
             "the complete matching list is in the rollback journal" if args.apply
             else "the CSV contains unique matching principals; use --verbose for all assignment details"))
     if not args.apply:
+        dry_run_journal_path = getattr(args, "dry_run_rollback_file", None)
+        if args.require_blob_backup and dry_run_journal_path is None:
+            dry_run_journal_path = path.with_name(path.stem + "-rollback.jsonl")
+        if dry_run_journal_path:
+            write_dry_run_journal(dry_run_journal_path, client, selection, filters, args,
+                                  records, actionable, blocked, pim_access, blob_backup, reporter)
         write_preview_csv(path, records, reporter)
         reporter.emit("DRY RUN: matched={}, removable={}, protected={}, Azure mutations=0.".format(
             len(records), len(actionable), len(blocked)))
@@ -2160,7 +2302,7 @@ def execute_delete(client, args, reporter):
             return 130
         client.verify_context()
         if selection.kind == "management-group" or selection.subscription_name_contains:
-            fresh = resolve_scope(client, scope_from_args(args))
+            fresh = resolve_scope(client, scope_from_args(args), workers=args.read_workers)
             if scope_document(fresh) != scope_document(selection):
                 raise SafetyError("Scope hierarchy or subscription display names changed after discovery.")
         if blob_backup is not None:
@@ -2468,6 +2610,8 @@ def execute_rollback(args, reporter, client=None):
         raise JournalError("Blob rollback backup is mandatory before applying restoration.")
     with RollbackJournal(path) as journal:
         rows = journal.read()
+        if rows and rows[0].get("mode") == "dry-run":
+            raise SafetyError("A dry-run/preview plan contains no completed deletions and cannot be used as a rollback source.")
         header, selection, snapshots, states = journal_state(rows)
         if header.get("blobBackupEnabled") and blob_backup is None:
             reporter.emit("WARNING: Original deletion used Blob backup; this rollback is local-only unless --rollback-blob-sas-url-env is supplied.")
@@ -2831,9 +2975,9 @@ def build_parser():
         command.add_argument("--tenant-id", type=guid, help="Require this tenant; does not switch accounts.")
         command.add_argument("--rollback-file", required=command is rollback)
         command.add_argument("--rollback-blob-sas-url-env", type=environment_name,
-                             help="Environment variable containing a full Blob SAS URL. With --apply, mirror the local journal before mutations.")
+                             help="Environment variable containing a full Blob SAS URL. With --apply, mirror the journal; required dry-runs also persist a plan snapshot.")
         command.add_argument("--require-blob-backup", action="store_true",
-                             help="With --apply, require remote rollback backup and verify its bytes before changes and at completion.")
+                             help="Require a remote snapshot/journal and verify its bytes before reporting success; apply also verifies before and after mutations.")
         command.add_argument("--allow-ephemeral-backup", action="store_true")
         command.add_argument("--verbose", action="store_true")
         command.add_argument("--timeout", type=int, default=60, help="HTTP/CLI timeout in seconds (default: 60).")
@@ -2866,7 +3010,7 @@ def build_parser():
     delete.add_argument("--source", choices=("arg", "arm"), default="arg",
                         help="Default: ARG candidates with bulk ARM property reads. arm lists directly; both verify again before deletion.")
     delete.add_argument("--read-workers", type=int, default=4,
-                        help="Concurrent read-only ARM scope lists and missing-ID GET fallbacks (1-16, default: 4).")
+                        help="Concurrent read-only ARM/PIM scope reads, subscription-name lookups and role-definition reads (1-16, default: 4).")
     delete.add_argument("--delete-workers", type=int, default=1,
                         help="RBAC delete workers (1-32, default: 1). More than one enables batched journaling; max 4 per subscription. PIM stays serial.")
     delete.add_argument("--delete-batch-size", type=int, default=100,
@@ -2907,7 +3051,7 @@ def main(argv=None):
         return 1
 
 
-AUTOMATION_CORE_SHA256 = '31314f5d9ab5a86664378ec6587e992b0a76ae7922957c922a0ec997c301a961'
+AUTOMATION_CORE_SHA256 = '7ea2fe716b2dc3ddb1ac4de3cdca5155a0692a3af61b8414f2b90e66db393894'
 
 # Azure Automation bootstrap: keep this section after the shared cleanup core.
 import tempfile
@@ -2938,7 +3082,8 @@ def automation_default_configuration():
         "arguments": [
             "delete", "--management-group", "KT_GPU", "--subscriptions-only", "--principal-type", "User",
             "--exclude-custom-role-name-prefix", "(KT", "--description-not-contains", "[SNOW_AUTO]",
-            "--assignment-kind", "regular", "--source", "arg", "--dry-run",
+            "--assignment-kind", "regular", "--read-workers", "8", "--delete-workers", "16",
+            "--source", "arg", "--dry-run",
         ],
         "assume_no_pim": False,
         "confirm_apply": None,
@@ -3135,15 +3280,20 @@ def automation_save_result(container, name, path, output, args, exit_code, error
         "rollback_blob_url": None, "preview_blob_url": None, "preview_users": None,
         "rollback_blob_initial_verified": bool(getattr(args, "rollback_blob_initial_verified", False)),
         "rollback_blob_verified": bool(getattr(args, "rollback_blob_verified", False)),
+        "rollback_blob_restorable": args.command == "rollback" or (args.command == "delete" and args.apply),
         "deleted_users_blob_url": None, "deleted_users": None, "deleted_role_assignments": None,
     }
     if rollback_url:
         parsed = urllib.parse.urlsplit(rollback_url)
         report["rollback_blob_url"] = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     failures = []
-    if output.exists() and output.suffix == ".jsonl":
+    journal_output = output
+    dry_run_journal = getattr(args, "dry_run_rollback_file", None)
+    if output.suffix != ".jsonl" and dry_run_journal:
+        journal_output = pathlib.Path(dry_run_journal)
+    if journal_output.exists() and journal_output.suffix == ".jsonl":
         try:
-            with output.open("rb") as stream:
+            with journal_output.open("rb") as stream:
                 for line in stream:
                     if not line.endswith(b"\n"):
                         raise ValueError("Incomplete trailing journal record")
@@ -3152,7 +3302,7 @@ def automation_save_result(container, name, path, output, args, exit_code, error
                         raise ValueError("Invalid journal record")
                     if row.get("event") == "plan_complete":
                         report["plan"] = {key: row[key] for key in ("count", "actionable") if key in row}
-                    if row.get("event") in ("delete_summary", "rollback_summary"):
+                    if row.get("event") in ("delete_summary", "rollback_summary", "dry_run_summary"):
                         report["summary"] = {key: value for key, value in row.items() if key not in ("event", "seq", "time")}
         except (OSError, ValueError, UnicodeError):
             failures.append("The local journal could not be fully read; do not treat its summary as complete.")
@@ -3240,10 +3390,11 @@ def automation_main(argv=None):
         print("JSON and config-variable input are not supported. Input values are never logged.")
         print("command=delete (default) or command=rollback; dry_run=true (default) or dry_run=false.")
         print("assume_no_pim=true skips PIM reads only when an operator independently verified no PIM assignments exist in the entire selected scope.")
-        print("Apply always requires dry_run=false, confirm_apply=DELETE or RESTORE and a read/write container SAS.")
+        print("Every delete run, including dry-run, requires a read/write container SAS and stores a verified JSONL rollback snapshot.")
+        print("Apply requires dry_run=false and confirm_apply=DELETE or RESTORE.")
         print("Container SAS source: backup_container_sas_url, backup_container_sas_variable or backup_container_sas_env (exactly one).")
-        print("Set save_output=true to store a result JSON and any preview CSV in the same Blob container; dry-run uploads require this opt-in.")
-        print("User names/UPNs/email are resolved automatically (Graph application User.Read.All required). Apply requires verified Blob rollback storage.")
+        print("Set save_output=true to store a result JSON and preview CSV; the rollback snapshot is stored regardless.")
+        print("Runbook does not call Microsoft Graph; user display name, UPN and email are not resolved.")
         print("Supported names: " + ", ".join(AUTOMATION_PARAMETER_TYPES))
         return 0
     internal_sas = "RBAC_AUTOMATION_JOURNAL_SAS_URL"
@@ -3258,6 +3409,7 @@ def automation_main(argv=None):
     result = 1
     save_output = False
     preserve_recovery = False
+    dry_run_journal_path = None
     try:
         config = automation_configuration(argv)
         specified = set(config)
@@ -3292,10 +3444,13 @@ def automation_main(argv=None):
         arguments[arguments.index("--dry-run")] = "--dry-run" if config.get("dry_run", True) else "--apply"
         directory = pathlib.Path(tempfile.mkdtemp(prefix="rbac-automation-"))
         applying = "--apply" in arguments
-        preserve_recovery = applying
+        preserve_recovery = applying or arguments[0] == "delete"
         output = directory / ("preview.csv" if arguments[0] == "delete" and not applying else "journal.jsonl")
         option = "--preview-file" if output.suffix == ".csv" else "--rollback-file"
         args = build_parser().parse_args(arguments + [option, str(output)])
+        if args.command == "delete" and not args.apply:
+            dry_run_journal_path = directory / "journal.jsonl"
+            args.dry_run_rollback_file = str(dry_run_journal_path)
         if args.timeout <= 0 or args.poll_timeout <= 0:
             raise SafetyError("Timeouts must be positive.")
         if args.tenant_id and args.tenant_id != tenant:
@@ -3303,7 +3458,7 @@ def automation_main(argv=None):
         args.tenant_id = tenant
         args.require_blob_backup = True
         if args.command == "delete":
-            args.include_user_details = True
+            args.include_user_details = False
             scope_from_args(args)
             if not 1 <= args.read_workers <= 16 or not 1 <= args.delete_workers <= 32 or not 1 <= args.delete_batch_size <= 500:
                 raise SafetyError("Read/delete workers or delete batch size is out of range.")
@@ -3311,17 +3466,17 @@ def automation_main(argv=None):
                 raise SafetyError("Managed identities cannot SelfActivate User eligibility; pregrant the runbook's required Azure RBAC permissions.")
         if args.apply and config.get("confirm_apply") != ("DELETE" if args.command == "delete" else "RESTORE"):
             raise SafetyError("Explicit confirm_apply=DELETE or RESTORE is required for Automation apply.")
-        if args.apply or args.command == "rollback" or save_output:
+        if args.command in ("delete", "rollback") or save_output:
             container = automation_container_secret(config)
             output_name = "rbac-cleanup-{}-{}".format(utc_now().strftime("%Y%m%dT%H%M%SZ"), uuid.uuid4().hex)
             if save_output:
                 automation_blob_url(container, output_name + "-result.json")
                 result_path = directory / "result.json"
-        if args.apply or args.command == "rollback":
+        if args.command in ("delete", "rollback"):
             if args.command == "rollback":
                 name = config.get("restore_blob_name")
             else:
-                name = output_name + ".jsonl"
+                name = output_name + ("-dry-run.jsonl" if not args.apply else ".jsonl")
             url = automation_blob_url(container, name)
             os.environ[internal_sas] = url
             args.rollback_blob_sas_url_env = internal_sas
@@ -3343,7 +3498,9 @@ def automation_main(argv=None):
         if args.apply:
             args.yes = True
         result = execute_delete(client, args, client.reporter) if args.command == "delete" else execute_rollback(args, client.reporter, client)
-        if args.apply and result == 0 and not getattr(args, "rollback_blob_verified", False):
+        if (result == 0 and args.require_blob_backup
+                and (args.command == "delete" or args.apply)
+                and not getattr(args, "rollback_blob_verified", False)):
             raise JournalError("Rollback Blob persistence was not verified. Refusing success; preserve the local journal.")
         if args.command == "delete" and not args.apply and output.exists():
             print("BEGIN_CSV_PREVIEW", flush=True)
@@ -3378,10 +3535,11 @@ def automation_main(argv=None):
             os.environ[internal_sas] = previous_sas
         if directory is not None:
             deleted_csv = output.with_name(output.stem + "-deleted-users.csv") if output is not None else None
-            local_files = [path for path in (output, result_path, deleted_csv) if path is not None and path.exists()]
+            local_files = [path for path in (output, result_path, deleted_csv, dry_run_journal_path)
+                           if path is not None and path.exists()]
             if preserve_recovery and local_files:
                 for path in local_files:
-                    label = "recovery journal" if path == output and path.suffix == ".jsonl" else "output"
+                    label = "recovery journal" if path.suffix == ".jsonl" else "output"
                     print("Local {} retained: {}. Sandbox storage is ephemeral; recover from Blob if necessary.".format(label, path), file=sys.stderr)
             else:
                 try:
