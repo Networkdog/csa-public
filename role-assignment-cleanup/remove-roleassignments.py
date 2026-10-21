@@ -4,6 +4,7 @@
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -28,6 +29,8 @@ PIM_API = "2020-10-01"
 ARG_API = "2024-04-01"
 MG_API = "2020-05-01"
 SUBSCRIPTION_API = "2022-12-01"
+BLOB_API = "2023-11-03"
+BLOB_APPEND_BYTES = 4 * 1024 * 1024
 OWNER_ROLE_ID = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
 USER_ACCESS_ADMIN_ROLE_ID = "18d7d88d-d35e-4fb3-a5c3-7773c20a72d9"
 KINDS = ("regular", "pim-eligible", "pim-timebound", "pim-activated")
@@ -600,6 +603,134 @@ def pim_restore_body(record, now=None):
     return {"properties": properties}
 
 
+class BlobJournalBackup:
+    def __init__(self, sas_url, timeout=60):
+        try:
+            if not isinstance(sas_url, str) or any(character.isspace() or ord(character) < 32 for character in sas_url):
+                raise ValueError("Invalid URL characters")
+            parsed = urllib.parse.urlsplit(sas_url)
+            if (parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment
+                    or parsed.port not in (None, 443) or not re.fullmatch(
+                        r"[a-z0-9]{3,24}\.(?:blob\.core\.(?:windows\.net|usgovcloudapi\.net|chinacloudapi\.cn|cloudapi\.de)"
+                        r"|z[0-9]+\.blob\.storage\.azure\.net)", parsed.hostname or "")):
+                raise ValueError("Expected an Azure Blob HTTPS endpoint")
+            path = urllib.parse.unquote(parsed.path)
+            segments = path.split("/")
+            if (len(segments) < 3 or not all(segments[1:]) or any(item in (".", "..") for item in segments[1:])
+                    or "\\" in path or any(ord(character) < 32 for character in path)):
+                raise ValueError("Expected a container and blob path")
+            pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+            query = dict(pairs)
+            if (len(query) != len(pairs) or not query.get("sig") or not query.get("sv")
+                    or not (query.get("se") or query.get("si"))
+                    or {"comp", "restype", "snapshot", "versionid"}.intersection(key.casefold() for key in query)):
+                raise ValueError("Expected a SAS without operation parameters")
+            if query.get("sr") not in ("b", "c") and not ("b" in query.get("ss", "") and "o" in query.get("srt", "")):
+                raise ValueError("SAS must allow blob objects")
+            if (query.get("sp") and not {"r", "w"}.issubset(query["sp"])) or not (query.get("sp") or query.get("si")):
+                raise ValueError("SAS must grant read and write permissions")
+            if query.get("spr") and "https" not in query["spr"].split(","):
+                raise ValueError("SAS must permit HTTPS")
+            if query.get("se") and parse_time(query["se"]) <= utc_now():
+                raise ValueError("SAS has expired")
+            if query.get("st") and parse_time(query["st"]) > utc_now():
+                raise ValueError("SAS is not yet valid")
+        except (ValueError, SafetyError):
+            raise JournalError(
+                "Invalid Blob SAS URL. Use an Azure Blob HTTPS URL with a container/blob path, "
+                "a valid blob/container/account SAS and read/write permissions. SAS values are never logged."
+            ) from None
+        self._url = sas_url
+        self.destination = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        self.timeout = timeout
+        self.opener = urllib.request.build_opener(NoRedirect())
+        self.offset = 0
+        self.etag = None
+
+    def request(self, method, body=None, headers=None, append=False, read_limit=0, allow_missing=False):
+        request_headers = {"x-ms-version": BLOB_API, "x-ms-client-request-id": str(uuid.uuid4()),
+                           "Accept-Encoding": "identity"}
+        request_headers.update(headers or {})
+        url = self._url + "&comp=appendblock" if append else self._url
+        try:
+            request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+            with self.opener.open(request, timeout=self.timeout) as response:
+                if response.getcode() != (200 if method == "GET" else 201):
+                    raise JournalError("Unexpected Blob backup response; local journal retained.")
+                return response.headers, response.read(read_limit) if read_limit else b""
+        except urllib.error.HTTPError as error:
+            status = error.code
+            error.close()
+            if allow_missing and status == 404:
+                return None
+            raise JournalError(
+                "Blob backup HTTP {}. Check SAS permissions/expiry, connectivity and blob conflicts. "
+                "Local journal retained; no further mutations allowed.".format(status)
+            ) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError, SafetyError):
+            raise JournalError(
+                "Blob backup failed or its write outcome is uncertain. Local journal retained; "
+                "no further mutations allowed. SAS details are suppressed."
+            ) from None
+
+    def response_etag(self, headers):
+        etag = headers.get("ETag")
+        if not isinstance(etag, str) or not etag or any(ord(character) < 32 for character in etag):
+            raise JournalError("Blob backup response is missing a valid ETag; no further mutations allowed.")
+        return etag
+
+    def initialize(self, stream, create=False):
+        stream.seek(0)
+        local = stream.read()
+        existing = None if create else self.request("GET", read_limit=len(local) + 1, allow_missing=True)
+        if existing is None:
+            headers, _ = self.request("PUT", body=b"", headers={
+                "If-None-Match": "*", "x-ms-blob-type": "AppendBlob", "Content-Length": "0",
+                "x-ms-blob-content-type": "application/x-ndjson; charset=utf-8",
+            })
+            self.etag = self.response_etag(headers)
+        else:
+            headers, remote = existing
+            if (headers.get("x-ms-blob-type") != "AppendBlob" or headers.get("Content-Length") != str(len(remote))
+                    or not local.startswith(remote)):
+                raise JournalError("Existing Blob backup is not an append-only prefix of this local journal; refusing to overwrite.")
+            self.etag = self.response_etag(headers)
+            self.offset = len(remote)
+        self.sync(stream)
+
+    def sync(self, stream):
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() < self.offset:
+            raise JournalError("Local journal is shorter than its Blob backup; refusing to overwrite.")
+        stream.seek(self.offset)
+        while True:
+            payload = stream.read(BLOB_APPEND_BYTES)
+            if not payload:
+                return
+            checksum = base64.b64encode(hashlib.md5(payload, usedforsecurity=False).digest()).decode("ascii")
+            headers, _ = self.request("PUT", body=payload, append=True, headers={
+                "Content-Length": str(len(payload)), "Content-MD5": checksum, "If-Match": self.etag,
+                "x-ms-blob-condition-appendpos": str(self.offset),
+            })
+            if headers.get("x-ms-blob-append-offset") != str(self.offset) or headers.get("Content-MD5") != checksum:
+                raise JournalError("Blob append position/checksum could not be verified; no further mutations allowed.")
+            self.etag = self.response_etag(headers)
+            self.offset += len(payload)
+
+
+def blob_backup_from_args(args, reporter):
+    if not args.rollback_blob_sas_url_env:
+        return None
+    sas_url = os.environ.get(args.rollback_blob_sas_url_env)
+    if not sas_url:
+        raise JournalError("The Blob SAS URL environment variable is missing or empty.")
+    backup = BlobJournalBackup(sas_url, args.timeout)
+    reporter.emit("Blob backup configured: " + backup.destination)
+    if not args.apply:
+        reporter.emit("DRY RUN: Blob SAS format checked locally; no Blob requests or uploads.")
+    return backup
+
+
 class RollbackJournal:
     def __init__(self, path, create=False):
         self.path = pathlib.Path(path).expanduser().resolve()
@@ -608,6 +739,7 @@ class RollbackJournal:
         self.trailing_bytes = 0
         self.append_ready = create
         self.locked = False
+        self.blob_backup = None
         try:
             if create:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -660,8 +792,27 @@ class RollbackJournal:
             self.file.flush()
             os.fsync(self.file.fileno())
         except OSError as error:
+            self.append_ready = False
             raise JournalError("Journal write/fsync failed. Stop all mutations; reconcile the last recorded intent.") from error
         self.sequence += 1
+        if self.blob_backup is not None:
+            try:
+                self.blob_backup.sync(self.file)
+            except (JournalError, OSError) as error:
+                self.append_ready = False
+                if isinstance(error, JournalError):
+                    raise
+                raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
+
+    def enable_blob_backup(self, backup, create=False):
+        try:
+            backup.initialize(self.file, create=create)
+        except (JournalError, OSError) as error:
+            self.append_ready = False
+            if isinstance(error, JournalError):
+                raise
+            raise JournalError("Cannot read the local journal for Blob backup; no further mutations allowed.") from error
+        self.blob_backup = backup
 
     def read(self):
         rows = []
@@ -1407,6 +1558,7 @@ def execute_delete(client, args, reporter):
     selection = scope_from_args(args)
     filters = FilterSpec.from_args(args)
     path = journal_path(args)
+    blob_backup = blob_backup_from_args(args, reporter)
     reporter.emit("Tenant: {} | Cloud: {} | Mode: {}".format(client.tenant, client.cloud, "APPLY" if args.apply else "DRY RUN"))
     reporter.emit("Scope: " + selection.root)
     records, inventory = discover_records(client, selection, filters, args.source, reporter, args.read_workers, args.assume_no_pim)
@@ -1438,6 +1590,7 @@ def execute_delete(client, args, reporter):
                        selection=scope_document(selection), filters=asdict(filters), source=args.source,
                        pimCheck="operator-asserted-absent" if args.assume_no_pim else "verified",
                        pimOwnerRemoval=args.use_pim_for_owner_removal,
+                       blobBackupEnabled=blob_backup is not None,
                        temporaryPimAccess=[{"scope": access.eligibility.scope, "eligibilityId": access.eligibility.identifier,
                                             "roleDefinitionId": access.eligibility.properties["roleDefinitionId"],
                                             "reuse": access.reused} for access in pim_access])
@@ -1446,6 +1599,8 @@ def execute_delete(client, args, reporter):
         journal.append("plan_complete", count=len(records), actionable=len(actionable))
         reporter.emit("Rollback journal: " + str(journal.path))
         if not args.apply or not actionable:
+            if args.apply and blob_backup is not None:
+                reporter.emit("Blob upload skipped: no removable assignments; Azure mutations=0.")
             reporter.emit("{}: matched={}, removable={}, protected={}, Azure mutations=0.".format(
                 "DRY RUN" if not args.apply else "No removable assignments", len(records), len(actionable), len(blocked)))
             return 1 if args.apply and blocked else 0
@@ -1459,6 +1614,9 @@ def execute_delete(client, args, reporter):
             fresh = resolve_scope(client, scope_from_args(args))
             if scope_document(fresh) != scope_document(selection):
                 raise SafetyError("Scope hierarchy or subscription display names changed after discovery.")
+        if blob_backup is not None:
+            journal.enable_blob_backup(blob_backup, create=True)
+            reporter.emit("Rollback journal uploaded; subsequent records will be synchronized before mutations.")
         client.allow_writes = True
         journal_healthy = True
         try:
@@ -1739,9 +1897,12 @@ def restore_record(client, record, state, args, reporter, journal):
 
 def execute_rollback(args, reporter, client=None):
     path = journal_path(args)
+    blob_backup = blob_backup_from_args(args, reporter)
     with RollbackJournal(path) as journal:
         rows = journal.read()
         header, selection, snapshots, states = journal_state(rows)
+        if header.get("blobBackupEnabled") and blob_backup is None:
+            reporter.emit("WARNING: Original deletion used Blob backup; this rollback is local-only unless --rollback-blob-sas-url-env is supplied.")
         pim_pending = pending_pim_access(rows)
         if header.get("pimCheck") == "operator-asserted-absent":
             reporter.emit("WARNING: The original deletion used --assume-no-pim; its PIM exclusion was not independently verified.")
@@ -1796,7 +1957,12 @@ def execute_rollback(args, reporter, client=None):
                 return 130
             client.verify_context()
             journal.prepare_append()
+            if blob_backup is not None:
+                journal.enable_blob_backup(blob_backup)
+                reporter.emit("Rollback journal synchronized to Blob before restoration.")
             client.allow_writes = True
+        elif args.apply and blob_backup is not None:
+            reporter.emit("Blob upload skipped: no restoration candidates; Azure mutations=0.")
         try:
             for index, record in enumerate(candidates, 1):
                 try:
@@ -1827,6 +1993,12 @@ def execute_rollback(args, reporter, client=None):
 def nonempty(value):
     if not value.strip():
         raise argparse.ArgumentTypeError("An empty filter is not allowed.")
+    return value
+
+
+def environment_name(value):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise argparse.ArgumentTypeError("Expected an environment variable name, not a SAS URL or token.")
     return value
 
 
@@ -2061,6 +2233,8 @@ def build_parser():
         command.add_argument("--yes", action="store_true", help="Skip confirmation, not safety checks.")
         command.add_argument("--tenant-id", type=guid, help="Require this tenant; does not switch accounts.")
         command.add_argument("--rollback-file", required=command is rollback)
+        command.add_argument("--rollback-blob-sas-url-env", type=environment_name,
+                             help="Environment variable containing a full Blob SAS URL. With --apply, mirror the local journal before mutations.")
         command.add_argument("--allow-ephemeral-backup", action="store_true")
         command.add_argument("--verbose", action="store_true")
         command.add_argument("--timeout", type=int, default=60, help="HTTP/CLI timeout in seconds (default: 60).")

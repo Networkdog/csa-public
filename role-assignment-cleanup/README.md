@@ -566,9 +566,77 @@ Cloud Shell에서는 마운트된 `~/clouddrive`를 기본 저장 위치로 사�
 
 저널에는 Object ID, 이름, 이메일 및 역할 정보가 포함될 수 있습니다. 암호화된 비밀 저장소가 아니며 신뢰할 수 있는 저장소에 보관해야 합니다. POSIX 파일 권한 0600만으로 Azure File Share의 전체 보안이 보장되지는 않습니다. 자동 롤백은 전체 작업의 원자적 트랜잭션 복원이 아니며, 다른 관리자의 동시 변경과 API 호출 사이의 경합도 완전히 제거할 수 없습니다.
 
+### Blob Storage에 SAS로 롤백 파일 동기화
+
+`delete`와 `rollback`에 **`--rollback-blob-sas-url-env ENV_NAME`**을 지정하면, 해당 환경변수에서 **Blob 전체 SAS URL**을 읽어 로컬 JSONL 저널을 Azure Blob Storage에도 동기화합니다. SAS 토큰만이나 Storage Account Key가 아니라 `https://<account>.blob.core.windows.net/<container>/<unique-name>.jsonl?<SAS>` 형식입니다. Azure SDK나 추가 패키지는 필요하지 않습니다.
+
+- SAS 값 자체를 CLI 인자, 코드, 저널 또는 Git에 넣지 않습니다. 출력에는 쿼리를 제외한 Blob 주소만 표시하며, HTTP 오류 본문과 예외에 포함될 수 있는 SAS는 출력하지 않습니다.
+- Blob/container SAS 또는 Blob object 접근이 가능한 account SAS를 지원합니다. 필요한 권한은 **Read + Write (`sp=rw`)**입니다. Stored access policy SAS는 실제 정책에서 동등한 권한을 허용해야 합니다. 가능하면 짧은 유효기간의 user delegation SAS를 사용하되, 전체 작업과 PIM 해제 대기 시간을 포함해야 합니다. Delete/List 권한은 필요하지 않습니다.
+- 기존 컨테이너와 **Append Blob을 지원하는 Storage Account**를 준비합니다. 새 삭제 실행마다 고유한 Blob 이름을 사용합니다. 임의 외부 호스트·HTTP·리디렉션·사용자 지정 도메인은 허용하지 않으며, Azure의 public/Gov/China/Germany 및 DNS zone Blob HTTPS endpoint를 지원합니다.
+- **Dry run은 SAS URL 형식/시간/명시된 권한만 로컬 검사하며 Blob에 접속하거나 업로드하지 않습니다.** 서버 권한, 네트워크와 실제 정책 검증은 `--apply`에서 수행합니다. 사용자 취소 또는 변경 대상이 0건인 실행도 업로드하지 않습니다.
+- `--apply`에서는 전체 스냅샷·완료된 삭제 계획을 로컬에 `fsync`하고, 확인을 마친 뒤 원격에 먼저 저장합니다. 이후 각 삭제·복원·PIM 활성화/해제의 **intent를 Blob에도 저장한 후** 해당 API를 호출합니다. 결과·최종 요약도 동기화합니다.
+- 원격은 JSONL 바이트를 그대로 담은 Append Blob입니다. 매번 전체 파일을 재업로드하지 않고 새 바이트만 추가하며, append position·ETag 조건·Content-MD5로 충돌과 전송 오류를 검사합니다. Azure Append Blob의 최대 50,000개 append block 한도가 있으므로 대규모 작업은 작은 범위로 나눕니다.
+- 업로드 실패, SAS 만료, 동시 수정 또는 결과 불확정은 종료 코드 1로 중단합니다. 로컬 파일은 유지합니다. 이미 수행된 삭제를 자동으로 성공 처리하거나 계속 삭제하지 않습니다. PIM 활성화 후 저널 업로드가 실패하면 추가 미기록 변경을 시도하지 않으므로, 요청 ID로 임시 권한을 별도 해제해야 할 수 있습니다.
+
+#### SAS를 화면·히스토리에 남기지 않고 입력
+
+Cloud Shell **Bash**에서, 준비한 고유 Blob SAS URL을 숨김 입력합니다. `set -x` 등 셸 추적은 사용하지 않습니다.
+
+```bash
+read -r -s -p "Blob SAS URL (hidden): " ROLLBACK_BLOB_SAS_URL
+printf '\n'
+export ROLLBACK_BLOB_SAS_URL
+```
+
+다음은 dev/stg 구독의 Owner 삭제 예제에 Blob 백업을 추가한 명령입니다. `SCRIPT`, `MANAGEMENT_GROUP_ID`는 위 공통 변수의 값을 실제 환경에 맞게 설정하고, 먼저 같은 조건을 `--dry-run`으로 확인합니다.
+
+```bash
+ROLLBACK_FILE="$HOME/clouddrive/rbac-owner-devstg-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}.jsonl"
+
+python3 "$SCRIPT" delete \
+  --management-group "$MANAGEMENT_GROUP_ID" \
+  --subscription-name-contains=-dev- \
+  --subscription-name-contains=-stg- \
+  --role-id "8e3af657-a8ff-443c-a75c-2fe8c4bcb635" \
+  --assignment-kind regular \
+  --use-pim-for-owner-removal \
+  --source arm \
+  --rollback-file "$ROLLBACK_FILE" \
+  --rollback-blob-sas-url-env ROLLBACK_BLOB_SAS_URL \
+  --apply
+```
+
+로컬 파일은 계속 필요합니다. Cloud Shell의 영구 저장소 검사는 그대로 유지하므로, 마운트된 `~/clouddrive`가 아닌 경로를 의도적으로 사용한다면 명시적 `--rollback-file PATH --allow-ephemeral-backup`도 지정해야 합니다.
+
+#### 롤백과 업로드 중단 후 복구
+
+로컬 저널이 없으면 신뢰할 수 있는 Blob 사본을 먼저 내려받아 `--rollback-file`로 지정합니다. 자동 다운로드 옵션은 아니며 파일을 수정하거나 줄 순서를 바꾸면 안 됩니다. 성공 응답 전 연결이 끊긴 경우 원격에는 `delete_intent`만 있을 수 있으므로, 필요한 경우 기존 `--reconcile-pending` 절차로 실제 상태를 확인합니다.
+
+롤백에서도 같은 환경변수 옵션을 지정하면, 원격 내용이 로컬 저널과 같거나 정확한 바이트 접두사인지 검사한 뒤 이어 기록합니다. SAS만 만료됐다면 같은 Blob의 새 SAS URL로 환경변수를 갱신할 수 있습니다. 원격 파일이 더 최신이거나 내용이 다르거나 Append Blob이 아니면 덮어쓰지 않고 중단합니다. 새 Blob 주소를 사용하면 현재 로컬 저널부터 새 사본을 만듭니다.
+
+```bash
+python3 "$SCRIPT" rollback \
+  --rollback-file "$ROLLBACK_FILE" \
+  --rollback-blob-sas-url-env ROLLBACK_BLOB_SAS_URL \
+  --dry-run
+
+python3 "$SCRIPT" rollback \
+  --rollback-file "$ROLLBACK_FILE" \
+  --rollback-blob-sas-url-env ROLLBACK_BLOB_SAS_URL \
+  --apply
+```
+
+옵션을 생략한 롤백은 로컬만 갱신하며, 원래 삭제가 Blob 백업을 사용했다면 경고합니다. 모든 작업을 마친 뒤 환경변수를 제거하고, 로컬/Blob 저널은 조직의 접근 통제와 보존 정책에 따라 보관합니다.
+
+```bash
+unset ROLLBACK_BLOB_SAS_URL
+```
+
 ## 필요한 권한
 
 조회 범위의 RBAC/역할 정의와 필요한 PIM schedules/instances 읽기, MG 선택 시 관리 그룹 계층 읽기가 필요합니다. 삭제에는 `Microsoft.Authorization/roleAssignments/delete`, 일반 복원에는 `Microsoft.Authorization/roleAssignments/write`, PIM 변경에는 해당 `roleAssignmentScheduleRequests/write` 또는 `roleEligibilityScheduleRequests/write` 권한이 필요합니다. 실제 허용 여부는 deny assignment, ABAC 조건 및 PIM 정책에 따라 달라집니다.
+
+선택적 Blob 백업은 별도의 SAS Read/Write 권한과 Blob endpoint 네트워크 접근이 필요합니다. ARM 토큰을 Blob Storage로 보내거나 Storage RBAC/계정 설정을 자동 변경하지 않습니다.
 
 이름/이메일/MI 구분에는 별도의 Microsoft Graph 읽기 권한이 필요합니다. 예를 들어 다른 사용자의 기본 프로필에는 `User.ReadBasic.All` 등 해당 API에서 허용하는 권한, 서비스 주체에는 `Application.Read.All` 또는 동등한 기존 권한, 그룹에는 기본 그룹 정보 읽기 권한이 필요합니다. **Azure RBAC Owner만으로 Graph 읽기가 보장되지는 않습니다.** 스크립트는 앱 등록, 관리자 동의, 로그인, 권한 상승을 자동 수행하지 않습니다.
 
@@ -596,6 +664,8 @@ python3 -B -m unittest discover -s tests -p test_remove_roleassignments.py -v
 ```
 
 주요 검증은 범위 경계, 1,001건 페이지 조회, 조건 조합, MI 구분, PIM 기본 제외, Dry run의 쓰기 0건, 백업 실패/중단, 충돌, 만료 보존, PIM API 경로, 삭제 후 복원 및 재실행입니다. 구독 이름 OR/대소문자·RG 경계·MG 제외·이름 변경·역할 GUID 필터, PIM 임시 활성화/기존 활성화 재사용/최소 유지 시간/승인 취소/부분 프로비저닝/불확정 응답/실패 시 정리 및 수동 정리 후 확인도 모의 테스트로 검증합니다. 운영 적용 전에는 격리된 테스트 범위에서 PIM 하위 범위 조회의 완전성, 정책과 권한, Cloud Shell 저장소를 함께 확인해야 합니다.
+
+2026-10-21 추가한 SAS Blob 백업은 환경변수·URL 검증, SAS 미노출, Dry run/취소 시 원격 쓰기 0건, 삭제/복원/PIM API보다 먼저 원격 intent 저장, 업로드 실패 중단, ETag 충돌, 중복 append 방지, 기존 Blob 보호, 접두사 검사 후 롤백 재개 및 원격 intent 사본 복구를 모의 API로 검증합니다. 실제 Storage Account/SAS에 대한 업로드는 실행하지 않았습니다.
 
 2026-10-20 추가한 구독 이름 필터와 임시 PIM Owner 삭제 옵션은 모의 API로 검증했으며 실제 Azure 권한은 변경하지 않았습니다. 아래의 이전 실계정 검증 기록은 새 PIM 활성화/해제 기능의 실환경 검증 결과가 아닙니다.
 
@@ -627,6 +697,8 @@ python3 -B -m unittest discover -s tests -p test_remove_roleassignments.py -v
 - [Resource Graph REST API](https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources)
 - [ARG 범위 옵션](https://learn.microsoft.com/en-us/azure/governance/resource-graph/concepts/query-language#query-scope)
 - [RBAC 생성/복원 필드](https://learn.microsoft.com/en-us/rest/api/authorization/role-assignments/create?view=rest-authorization-2022-04-01)
+- [Blob 생성 및 SAS 권한](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob)
+- [Append Block 조건·검사합 및 SAS 권한](https://learn.microsoft.com/en-us/rest/api/storageservices/append-block)
 - [구독 Display Name 조회](https://learn.microsoft.com/en-us/rest/api/resources/subscriptions/get?view=rest-resources-2022-12-01)
 - [마지막 Owner 삭제 제한 및 PIM 사용 경로](https://learn.microsoft.com/en-us/azure/role-based-access-control/troubleshooting#symptom---cannot-delete-the-last-owner-role-assignment)
 - [PIM 활성화·취소·5분 최소 유지](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-resource-roles-activate-your-roles)
