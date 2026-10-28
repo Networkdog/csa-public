@@ -1,4 +1,4 @@
-"""Read-only, dependency-free ACR inventory and PHP2Shell / Node2Shell version-evidence scanner."""
+"""Read-only parallel ACR runtime CVE scanner with DefaultAzureCredential or explicit CLI authentication."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import hashlib
 import http.client
 import io
 import json
+import multiprocessing
+import os
 import posixpath
 import re
 import shutil
@@ -15,15 +17,68 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
+from collections import Counter, OrderedDict, deque
+from contextlib import ExitStack
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Iterator, Protocol, TextIO
+from typing import BinaryIO, Callable, Iterable, Iterator, Protocol, TextIO, TypeVar
+
+
+T = TypeVar("T")
+R = TypeVar("R")
+LOGIN_LOCK = threading.Lock()
+
+
+class Cancellation(Protocol):
+    def is_set(self) -> bool: ...
+
+
+PARSER_STOP: Cancellation | None = None
+
+
+def initialize_parser(stop: Cancellation) -> None:
+    global PARSER_STOP
+    PARSER_STOP = stop
+
+
+def bounded_map(pool: ThreadPoolExecutor | None, function: Callable[[T], R],
+                values: Iterable[T], window: int = 16,
+                check: Callable[[], None] | None = None) -> Iterator[R]:
+    if pool is None:
+        yield from map(function, values)
+        return
+    iterator = iter(values)
+    pending: set[Future[R]] = set()
+    try:
+        while True:
+            if check:
+                check()
+            while len(pending) < window:
+                if check:
+                    check()
+                try:
+                    value = next(iterator)
+                except StopIteration:
+                    break
+                pending.add(pool.submit(function, value))
+            if not pending:
+                break
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            if check:
+                check()
+            for future in done:
+                yield future.result()
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 PHP_CVE_IDS = ("CVE-2026-109618", "CVE-2026-109619")
@@ -108,6 +163,30 @@ class ScanError(Exception):
     pass
 
 
+class AccessDeniedError(ScanError):
+    def __init__(self, reason: str, context: dict[str, str] | None = None) -> None:
+        super().__init__(reason)
+        self.context = context or {}
+        self.sealed = False
+
+    def at(self, **context: str) -> AccessDeniedError:
+        if self.sealed:
+            return self
+        return AccessDeniedError(self.args[0], {**context, **self.context})
+
+    def __str__(self) -> str:
+        location = ", ".join(f"{key}={value}" for key, value in self.context.items() if value)
+        return str(self.args[0]) + (f" [{location}]" if location else "")
+
+
+def access_denied(operation: str, status: int, hint: str, **context: str) -> AccessDeniedError:
+    return AccessDeniedError(
+        f"ACCESS_DENIED: {operation}; HTTP {status}. {hint}. "
+        "For HTTP 403, also verify Public Network Access, Private Endpoint DNS and firewall policy",
+        context,
+    )
+
+
 def object_value(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ScanError(f"INVALID_JSON_OBJECT: {label}")
@@ -152,6 +231,24 @@ def run_az(arguments: list[str]) -> object:
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
         raise ScanError(f"AZURE_CLI_EXECUTION_FAILED: {type(exc).__name__}") from exc
     if result.returncode:
+        if re.search(
+            r"AuthorizationFailed|AuthorizationPermissionMismatch|AccessDenied|Forbidden|Unauthorized|\bdenied\b"
+            r"|authentication required|insufficient (?:privileges|permissions)"
+            r"|does not have authorization|AADSTS\d+|please run.{0,30}az login|not logged in",
+            result.stderr, re.IGNORECASE,
+        ):
+            context: dict[str, str] = {}
+            for flag, field in (("--subscription", "SubscriptionId"), ("--registry", "Registry")):
+                if flag in arguments:
+                    context[field] = arguments[arguments.index(flag) + 1]
+            if arguments[:2] == ["acr", "login"] and "--name" in arguments:
+                context["Registry"] = arguments[arguments.index("--name") + 1]
+            raise AccessDeniedError(
+                "AZURE_CLI_ACCESS_DENIED: " + " ".join(arguments[:3])
+                + "; check az login/tenant and Reader plus AcrPull or "
+                "ABAC Repository Reader + Catalog Lister at the intended scope",
+                context,
+            )
         raise ScanError(
             "AZURE_CLI_FAILED: check az login, selected subscription, "
             "registry catalog/read permissions and network access"
@@ -192,23 +289,189 @@ class Registry(Protocol):
              destination: BinaryIO, limit: int) -> None: ...
 
 
+class IdentityToken(Protocol):
+    @property
+    def token(self) -> str: ...
+    @property
+    def expires_on(self) -> int: ...
+
+
+class IdentityCredential(Protocol):
+    def get_token(self, *scopes: str) -> IdentityToken: ...
+    def close(self) -> None: ...
+
+
+CLOUDS = {
+    "AzureCloud": ("https://management.azure.com", "https://login.microsoftonline.com",
+                   "https://containerregistry.azure.net/.default"),
+    "AzureUSGovernment": ("https://management.usgovcloudapi.net", "https://login.microsoftonline.us",
+                          "https://containerregistry.azure.us/.default"),
+    "AzureChinaCloud": ("https://management.chinacloudapi.cn", "https://login.chinacloudapi.cn",
+                       "https://containerregistry.azure.cn/.default"),
+}
+
+
+class AzureIdentityAuth:
+    def __init__(self, credential: IdentityCredential, cloud: str = "AzureCloud",
+                 timeout: int = 60) -> None:
+        self.credential = credential
+        self.arm, _, self.acr_scope = CLOUDS[cloud]
+        self.timeout = timeout
+        self.guard = threading.RLock()
+        self.tokens: dict[str, tuple[str, int]] = {}
+        self.http = threading.local()
+        self.stop: threading.Event | None = None
+
+    def token(self, scope: str) -> str:
+        from azure.core.exceptions import AzureError, ClientAuthenticationError
+
+        with self.guard:
+            if self.stop and self.stop.is_set():
+                raise ScanError("CANCELLED")
+            cached = self.tokens.get(scope)
+            if cached and cached[1] > time.time() + 60:
+                return cached[0]
+            try:
+                token = self.credential.get_token(scope)
+            except ClientAuthenticationError as exc:
+                raise AccessDeniedError(
+                    f"AZURE_IDENTITY_ACCESS_DENIED: {type(exc).__name__}; "
+                    "configure the intended credential/tenant or Managed Identity client ID; "
+                    "no alternative authentication mode will be selected",
+                ) from None
+            except AzureError as exc:
+                raise ScanError(f"AZURE_IDENTITY_FAILED: {type(exc).__name__}; check credential chain and RBAC") from None
+            self.tokens[scope] = token.token, token.expires_on
+            return token.token
+
+    def arm_json(self, url: str) -> dict[str, object]:
+        parsed = urllib.parse.urlsplit(url)
+        if (parsed.scheme != "https" or parsed.netloc != urllib.parse.urlsplit(self.arm).netloc
+                or parsed.username or parsed.password or parsed.fragment):
+            raise ScanError("UNTRUSTED_ARM_URL")
+        if not hasattr(self.http, "opener"):
+            self.http.opener = urllib.request.build_opener(NoRedirect())
+        scope = self.arm + "/.default"
+        for attempt in range(4):
+            if self.stop and self.stop.is_set():
+                raise ScanError("CANCELLED")
+            request = urllib.request.Request(url, headers={"Authorization": "Bearer " + self.token(scope)})
+            try:
+                raw = read_response(self.http.opener.open(request, timeout=self.timeout),
+                                    4 * 1024 * 1024, "ARM_RESPONSE")
+                return json_object(raw, "ARM response")
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+                retry_after = exc.headers.get("Retry-After", "")
+                exc.close()
+                if status == 401 and attempt == 0:
+                    with self.guard:
+                        self.tokens.pop(scope, None)
+                    continue
+                if status in (401, 403):
+                    context: dict[str, str] = {}
+                    sub = re.search(r"/subscriptions/([^/]+)", parsed.path, re.IGNORECASE)
+                    if sub:
+                        context["SubscriptionId"] = sub[1]
+                    hint = ("Reader: Microsoft.Management/managementGroups/descendants/read"
+                            if parsed.path.endswith("/descendants")
+                            else "Reader: Microsoft.ContainerRegistry/registries/read on the requested scope")
+                    raise access_denied(f"ARM GET {parsed.path}", status, hint, **context) from None
+                if status in (429, 500, 502, 503, 504) and attempt < 3:
+                    delay = min(int(retry_after), 30) if retry_after.isdigit() else 2 ** attempt
+                    print(f"Retry ARM HTTP {status} in {delay}s", file=sys.stderr)
+                    if self.stop:
+                        if self.stop.wait(delay):
+                            raise ScanError("CANCELLED")
+                    else:
+                        time.sleep(delay)
+                    continue
+                raise ScanError(f"ARM_HTTP_{status}: verify identity, scope and Reader permissions") from None
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+                raise ScanError(f"ARM_NETWORK_FAILED: {type(exc).__name__}") from None
+        raise ScanError("ARM_REQUEST_FAILED")
+
+    def resolve_registry(self, name: str, subscription: str | None,
+                         resource_id: str | None) -> dict[str, object]:
+        if resource_id:
+            return self.arm_json(f"{self.arm}{resource_id}?api-version=2023-07-01")
+        subscription = subscription or os.environ.get("AZURE_SUBSCRIPTION_ID")
+        if not subscription:
+            raise ScanError("SUBSCRIPTION_REQUIRED: use --subscription or AZURE_SUBSCRIPTION_ID with --registry")
+        prefix = f"{self.arm}/subscriptions/{urllib.parse.quote(subscription, safe='')}"
+        for entry in arm_pages(prefix + "/providers/Microsoft.ContainerRegistry/registries?api-version=2023-07-01",
+                               auth=self):
+            if entry.get("name") == name:
+                return entry
+        raise ScanError("REGISTRY_NOT_FOUND_IN_SUBSCRIPTION")
+
+    def close(self) -> None:
+        self.credential.close()
+
+
+def create_auth(args: argparse.Namespace) -> AzureIdentityAuth | None:
+    if args.auth == "azure-cli":
+        return None
+    try:
+        from azure.identity import DefaultAzureCredential
+    except ImportError:
+        raise ScanError("AZURE_IDENTITY_MISSING: install requirements.txt or explicitly use --auth azure-cli") from None
+    try:
+        credential = DefaultAzureCredential(
+            managed_identity_client_id=args.managed_identity_client_id or os.environ.get("AZURE_CLIENT_ID"),
+            authority=CLOUDS[args.cloud][1], exclude_interactive_browser_credential=True,
+            exclude_broker_credential=True,
+        )
+    except ValueError as exc:
+        raise ScanError(f"AZURE_IDENTITY_CONFIGURATION_INVALID: {type(exc).__name__}") from None
+    return AzureIdentityAuth(credential, args.cloud, args.timeout)
+
+
 class AzureRegistry:
-    def __init__(self, name: str, timeout: int = 60, subscription: str | None = None) -> None:
+    def __init__(self, name: str, timeout: int = 60, subscription: str | None = None,
+                 auth: AzureIdentityAuth | None = None, resource_id: str | None = None) -> None:
         self.name = name
         self.subscription = subscription
+        self.auth = auth
+        self.resource_id = resource_id
         self.timeout = timeout
-        self.opener = urllib.request.build_opener(NoRedirect())
+        self._http = threading.local()
+        self._auth_lock = threading.RLock()
+        self.stop: threading.Event | None = None
         self.server = ""
         self.refresh_token = ""
-        self.tokens: dict[str, tuple[str, float]] = {}
+        self.tokens: dict[tuple[str, str], tuple[str, float]] = {}
         self._login()
 
+    @property
+    def opener(self) -> urllib.request.OpenerDirector:
+        if not hasattr(self._http, "opener"):
+            self._http.opener = urllib.request.build_opener(NoRedirect())
+        return self._http.opener
+
     def _cli(self, arguments: list[str]) -> object:
+        if self.stop and self.stop.is_set():
+            raise ScanError("CANCELLED")
         if self.subscription:
             arguments = [*arguments, "--subscription", self.subscription]
-        return run_az(arguments)
+        try:
+            return run_az(arguments)
+        except AccessDeniedError as exc:
+            raise exc.at(Registry=self.name, SubscriptionId=self.subscription or "",
+                         RegistryId=self.resource_id or "")
 
     def _login(self) -> None:
+        with self._auth_lock, LOGIN_LOCK:
+            try:
+                self._login_locked()
+            except AccessDeniedError as exc:
+                raise exc.at(Registry=self.name, SubscriptionId=self.subscription or "",
+                             RegistryId=self.resource_id or "")
+
+    def _login_locked(self) -> None:
+        if self.auth:
+            self._identity_login()
+            return
         login = object_value(
             self._cli(["acr", "login", "--name", self.name, "--expose-token"]),
             "Azure CLI login response",
@@ -222,8 +485,58 @@ class AzureRegistry:
         self.refresh_token = string_value(login.get("accessToken"), "ACR refresh token")
         self.tokens.clear()
 
+    def _identity_login(self) -> None:
+        if self.stop and self.stop.is_set():
+            raise ScanError("CANCELLED")
+        auth = self.auth
+        if auth is None:
+            raise ScanError("AZURE_IDENTITY_REQUIRED")
+        metadata = auth.resolve_registry(self.name, self.subscription, self.resource_id)
+        resource_id = string_value(metadata.get("id"), "registry id")
+        match = re.fullmatch(
+            r"/subscriptions/([0-9a-fA-F-]{36})/resourceGroups/[^/]+"
+            rf"/providers/Microsoft.ContainerRegistry/registries/{re.escape(self.name)}",
+            resource_id, re.IGNORECASE,
+        )
+        if metadata.get("name") != self.name or not match:
+            raise ScanError("REGISTRY_IDENTITY_MISMATCH")
+        self.resource_id = resource_id
+        self.subscription = match[1]
+        server = string_value(
+            object_value(metadata.get("properties"), "registry properties").get("loginServer"), "loginServer",
+        ).lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*\.azurecr\.(?:io|cn|us)", server):
+            raise ScanError("UNEXPECTED_LOGIN_SERVER")
+        if self.server and self.server != server:
+            raise ScanError("LOGIN_SERVER_CHANGED")
+        self.server = server
+        for attempt in range(2):
+            data = urllib.parse.urlencode({
+                "grant_type": "access_token", "service": server,
+                "access_token": auth.token(auth.acr_scope),
+            }).encode("ascii")
+            request = urllib.request.Request(f"https://{server}/oauth2/exchange", data=data,
+                                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+            try:
+                raw = read_response(self._open(request), 1024 * 1024, "ACR_EXCHANGE")
+                break
+            except urllib.error.HTTPError as exc:
+                status = exc.code
+                exc.close()
+                if status == 401 and attempt == 0:
+                    with auth.guard:
+                        auth.tokens.pop(auth.acr_scope, None)
+                    continue
+                if status in (401, 403):
+                    raise self._denied("ACR Entra token exchange", status) from None
+                raise ScanError(f"ACR_EXCHANGE_HTTP_{status}: verify identity and ACR data roles") from None
+        self.refresh_token = string_value(json_object(raw, "ACR exchange").get("refresh_token"), "refresh_token")
+        self.tokens.clear()
+
     def _open(self, request: urllib.request.Request, blob: bool = False) -> http.client.HTTPResponse:
         for _ in range(4):
+            if self.stop and self.stop.is_set():
+                raise ScanError("CANCELLED")
             try:
                 return self.opener.open(request, timeout=self.timeout)
             except urllib.error.HTTPError as exc:
@@ -259,15 +572,20 @@ class AzureRegistry:
                 raise ScanError(f"NETWORK_ERROR: {type(exc).__name__}") from exc
         raise ScanError("TOO_MANY_HTTP_REDIRECTS")
 
-    def _token(self, repository: str) -> str:
-        cached = self.tokens.get(repository)
+    def _token(self, repository: str, permission: str = "pull") -> str:
+        with self._auth_lock:
+            return self._token_locked(repository, permission)
+
+    def _token_locked(self, repository: str, permission: str) -> str:
+        key = repository, permission
+        cached = self.tokens.get(key)
         if cached and cached[1] > time.monotonic():
             return cached[0]
         for attempt in range(2):
             data = urllib.parse.urlencode({
                 "grant_type": "refresh_token",
                 "service": self.server,
-                "scope": f"repository:{repository}:pull",
+                "scope": f"repository:{repository}:{permission}" if repository else "registry:catalog:*",
                 "refresh_token": self.refresh_token,
             }).encode("ascii")
             request = urllib.request.Request(
@@ -282,18 +600,22 @@ class AzureRegistry:
                 if status == 401 and attempt == 0:
                     self._login()
                     continue
+                if status in (401, 403):
+                    raise self._denied("ACR scoped token exchange", status, repository, permission) from None
                 raise ScanError(f"ACR_TOKEN_HTTP_{status}: verify pull permissions and az login") from None
             token = string_value(json_object(raw, "ACR token").get("access_token"), "access_token")
-            self.tokens[repository] = (token, time.monotonic() + 300)
+            self.tokens[key] = (token, time.monotonic() + 300)
             return token
         raise ScanError("ACR_TOKEN_REFRESH_FAILED")
 
-    def _get(self, repository: str, path: str, blob: bool = False) -> http.client.HTTPResponse:
-        for attempt in range(2):
+    def _get(self, repository: str, path: str, blob: bool = False,
+             permission: str = "pull") -> http.client.HTTPResponse:
+        refreshed = False
+        for attempt in range(4):
             request = urllib.request.Request(
                 f"https://{self.server}{path}",
                 headers={
-                    "Authorization": f"Bearer {self._token(repository)}",
+                    "Authorization": f"Bearer {self._token(repository, permission)}",
                     "Accept": ", ".join(sorted(INDEX_TYPES | IMAGE_TYPES)),
                     "User-Agent": "csa-acr-runtime-cves/1.0",
                 },
@@ -302,31 +624,99 @@ class AzureRegistry:
                 return self._open(request, blob=blob)
             except urllib.error.HTTPError as exc:
                 status = exc.code
+                retry_after = exc.headers.get("Retry-After", "")
                 exc.close()
-                if status == 401 and attempt == 0:
+                if status == 401 and not refreshed:
+                    refreshed = True
                     self._login()
+                    continue
+                if status in (401, 403):
+                    error = self._denied("ACR read", status, repository, permission)
+                    if "/manifests/" in path:
+                        error = error.at(Digest=path.rsplit("/", 1)[1])
+                    elif "/blobs/" in path:
+                        error = error.at(LayerDigest=path.rsplit("/", 1)[1])
+                    raise error from None
+                if status in (429, 500, 502, 503, 504) and attempt < 3:
+                    delay = min(int(retry_after), 30) if retry_after.isdigit() else 2 ** attempt
+                    print(f"Retry registry HTTP {status} in {delay}s", file=sys.stderr)
+                    if self.stop:
+                        if self.stop.wait(delay):
+                            raise ScanError("CANCELLED")
+                    else:
+                        time.sleep(delay)
                     continue
                 raise ScanError(f"REGISTRY_HTTP_{status}: manifest/blob could not be read") from None
         raise ScanError("REGISTRY_AUTHENTICATION_FAILED")
 
+    def _denied(self, operation: str, status: int, repository: str = "",
+                permission: str = "pull") -> AccessDeniedError:
+        hint = ("AcrPull (legacy), or Container Registry Repository Catalog Lister (ABAC)"
+                if not repository else
+                "AcrPull (legacy), or Container Registry Repository Reader (ABAC): "
+                + ("repositories/metadata/read" if permission == "metadata_read"
+                   else "repositories/content/read"))
+        return access_denied(operation, status, hint, Registry=self.name, Repository=repository,
+                             SubscriptionId=self.subscription or "", RegistryId=self.resource_id or "")
+
     def repositories(self) -> Iterator[str]:
+        if self.auth:
+            for page in self._data_pages("", "/acr/v1/_catalog?n=100"):
+                for value in list_value(page.get("repositories"), "repositories"):
+                    yield string_value(value, "repository")
+            return
         result = list_value(self._cli(["acr", "repository", "list", "--name", self.name]), "repositories")
         for item in result:
             yield string_value(item, "repository")
 
     def manifests(self, repository: str) -> Iterator[ManifestRef]:
+        if self.auth:
+            for page in self._data_pages(
+                repository, f"/acr/v1/{urllib.parse.quote(repository, safe='/')}/_manifests?n=100",
+                "metadata_read",
+            ):
+                for value in list_value(page.get("manifests"), "manifests"):
+                    yield self._manifest_reference(value)
+            return
         items = list_value(self._cli([
             "acr", "manifest", "list-metadata", "--registry", self.name,
             "--name", repository, "--query", "[]",
         ]), "manifests")
         for item in items:
-            entry = object_value(item, "manifest metadata")
-            tags = entry.get("tags")
-            yield ManifestRef(
-                digest_value(entry.get("digest")),
-                tuple(string_value(tag, "tag") for tag in list_value(tags, "tags"))
-                if tags is not None else (),
-            )
+            yield self._manifest_reference(item)
+
+    @staticmethod
+    def _manifest_reference(item: object) -> ManifestRef:
+        entry = object_value(item, "manifest metadata")
+        tags = entry.get("tags")
+        return ManifestRef(
+            digest_value(entry.get("digest")),
+            tuple(string_value(tag, "tag") for tag in list_value(tags, "tags")) if tags is not None else (),
+        )
+
+    def _data_pages(self, repository: str, path: str, permission: str = "pull") -> Iterator[dict[str, object]]:
+        initial = urllib.parse.urlsplit(path).path
+        seen: set[str] = set()
+        while path:
+            if path in seen:
+                raise ScanError("REPEATED_ACR_NEXT_LINK")
+            seen.add(path)
+            response = self._get(repository, path, permission=permission)
+            link = response.headers.get("Link", "")
+            page = json_object(read_response(response, 4 * 1024 * 1024, "ACR_METADATA"), "ACR metadata")
+            yield page
+            matches = re.findall(r'<([^>]+)>\s*;\s*rel="?next"?', link, re.IGNORECASE)
+            if not matches:
+                if link:
+                    raise ScanError("UNSUPPORTED_ACR_LINK_HEADER")
+                break
+            if len(matches) != 1:
+                raise ScanError("INVALID_ACR_NEXT_LINK")
+            parsed = urllib.parse.urlsplit(urllib.parse.urljoin(f"https://{self.server}{path}", matches[0]))
+            if (parsed.scheme != "https" or parsed.netloc != self.server or parsed.path != initial
+                    or parsed.username or parsed.password or parsed.fragment):
+                raise ScanError("UNTRUSTED_ACR_NEXT_LINK")
+            path = parsed.path + ("?" + parsed.query if parsed.query else "")
 
     def manifest(self, repository: str, digest: str) -> dict[str, object]:
         digest_value(digest)
@@ -353,6 +743,8 @@ class AzureRegistry:
             try:
                 with self._get(repository, path, blob=True) as response:
                     while chunk := response.read(1024 * 1024):
+                        if self.stop and self.stop.is_set():
+                            raise ScanError("CANCELLED")
                         received += len(chunk)
                         if received > limit:
                             raise ScanError("BLOB_SIZE_LIMIT_EXCEEDED")
@@ -392,33 +784,63 @@ class Inventory:
     issues: list[Issue] = field(default_factory=list)
 
 
-def catalog(registry: Registry) -> tuple[dict[str, list[ManifestRef]], list[Issue]]:
+def catalog(registry: Registry, parallel: Parallelism | None = None) -> tuple[dict[str, list[ManifestRef]], list[Issue]]:
     result: dict[str, list[ManifestRef]] = {}
     issues: list[Issue] = []
+    def read(repository: str) -> tuple[str, list[ManifestRef], Issue | None]:
+        try:
+            if parallel:
+                parallel.check()
+            return repository, list(registry.manifests(repository)), None
+        except AccessDeniedError as exc:
+            error = exc.at(Repository=repository)
+            if parallel:
+                parallel.deny(error)
+            raise error
+        except ScanError as exc:
+            return repository, [], Issue(repository, "", str(exc))
+
     try:
-        for repository in registry.repositories():
-            try:
-                result[repository] = list(registry.manifests(repository))
-            except ScanError as exc:
-                issues.append(Issue(repository, "", str(exc)))
+        for repository, references, issue in bounded_map(
+            parallel.metadata if parallel else None, read, registry.repositories(),
+            check=parallel.check if parallel else None,
+        ):
+            if issue:
+                issues.append(issue)
+            else:
+                result[repository] = references
+    except AccessDeniedError:
+        raise
     except ScanError as exc:
         issues.append(Issue("", "", str(exc)))
     return result, issues
 
 
-def inventory(registry: Registry) -> Inventory:
-    repositories, issues = catalog(registry)
+def inventory(registry: Registry, parallel: Parallelism | None = None) -> Inventory:
+    repositories, issues = catalog(registry, parallel)
     result = Inventory(issues=issues)
-    cache: dict[tuple[str, str], dict[str, object]] = {}
+    cache: dict[tuple[str, str], Future[dict[str, object]]] = {}
+    guard = threading.RLock()
+
+    def fetch(repository: str, digest: str) -> dict[str, object]:
+        with guard:
+            key = repository, digest
+            owner = key not in cache
+            future = cache.setdefault(key, Future())
+        if owner:
+            try:
+                future.set_result(registry.manifest(repository, digest))
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+        return future.result()
 
     def expand(repository: str, digest: str, tags: set[str], ancestors: tuple[str, ...],
                inherited_tags: set[str]) -> None:
         if digest in ancestors or len(ancestors) >= 16:
             raise ScanError("MANIFEST_INDEX_CYCLE_OR_DEPTH_LIMIT")
         key = (repository, digest)
-        if key not in cache:
-            cache[key] = registry.manifest(repository, digest)
-        manifest = cache[key]
+        manifest = fetch(repository, digest)
         media_type = string_value(manifest.get("mediaType"), "manifest mediaType")
         if media_type in INDEX_TYPES:
             children = list_value(manifest.get("manifests"), "index manifests")
@@ -430,21 +852,38 @@ def inventory(registry: Registry) -> Inventory:
                 try:
                     expand(repository, child_digest, set(), (*ancestors, digest),
                            inherited_tags | tags)
+                except AccessDeniedError:
+                    raise
                 except ScanError as exc:
-                    result.issues.append(Issue(repository, child_digest, str(exc)))
+                    with guard:
+                        result.issues.append(Issue(repository, child_digest, str(exc)))
             return
-        target = result.targets.setdefault(key, Target(repository, digest, manifest))
-        target.tags.update(tags)
-        target.indexes.update(ancestors)
-        target.index_tags.update(inherited_tags)
+        with guard:
+            target = result.targets.setdefault(key, Target(repository, digest, manifest))
+            target.tags.update(tags)
+            target.indexes.update(ancestors)
+            target.index_tags.update(inherited_tags)
 
-    for repository, manifests in repositories.items():
-        for reference in manifests:
+    def read(item: tuple[str, ManifestRef]) -> None:
+        repository, reference = item
+        with guard:
             result.listed.add((repository, reference.digest))
-            try:
-                expand(repository, reference.digest, set(reference.tags), (), set())
-            except ScanError as exc:
+        try:
+            if parallel:
+                parallel.check()
+            expand(repository, reference.digest, set(reference.tags), (), set())
+        except AccessDeniedError as exc:
+            error = exc.at(Repository=repository, Digest=reference.digest)
+            if parallel:
+                parallel.deny(error)
+            raise error
+        except ScanError as exc:
+            with guard:
                 result.issues.append(Issue(repository, reference.digest, str(exc)))
+    entries = ((repository, ref) for repository, manifests in repositories.items() for ref in manifests)
+    for _ in bounded_map(parallel.metadata if parallel else None, read, entries,
+                         check=parallel.check if parallel else None):
+        pass
     return result
 
 
@@ -572,7 +1011,8 @@ class Layer:
     changes: tuple[Change, ...]
 
 
-def scan_layer(stream: BinaryIO, digest: str, file_limit: int, unpacked_limit: int) -> Layer:
+def scan_layer(stream: BinaryIO, digest: str, file_limit: int, unpacked_limit: int,
+               stop: Cancellation | None = None) -> Layer:
     whiteouts: list[str] = []
     opaque: list[str] = []
     changes: list[Change] = []
@@ -580,6 +1020,8 @@ def scan_layer(stream: BinaryIO, digest: str, file_limit: int, unpacked_limit: i
     try:
         with tarfile.open(fileobj=stream, mode="r:*") as archive:
             for member in archive:
+                if stop and stop.is_set():
+                    raise ScanError("CANCELLED")
                 path = path_value(member.name)
                 if path == ".":
                     continue
@@ -676,7 +1118,164 @@ class Analysis:
     notes: str = ""
 
 
-def analyze(registry: Registry, target: Target, cache: dict[str, Layer], limits: Limits) -> Analysis:
+def parse_layer_file(path: str, digest: str, file_limit: int, unpacked_limit: int) -> Layer:
+    with open(path, "rb") as stream:
+        return scan_layer(stream, digest, file_limit, unpacked_limit, PARSER_STOP)
+
+
+class Parallelism:
+    def __init__(self, workers: int = 8, registry_workers: int = 4,
+                 metadata_workers: int = 8, parse_workers: int = 2,
+                 cache_mib: int = 256, process_parsers: bool = True) -> None:
+        self.workers = workers
+        self.stop = threading.Event()
+        self.registries = ThreadPoolExecutor(registry_workers, thread_name_prefix="registry")
+        self.metadata = ThreadPoolExecutor(metadata_workers, thread_name_prefix="metadata")
+        self.images = ThreadPoolExecutor(workers, thread_name_prefix="image")
+        self.layers = ThreadPoolExecutor(workers, thread_name_prefix="layer")
+        context = multiprocessing.get_context("spawn")
+        try:
+            self.parser_stop = context.Event() if process_parsers else None
+            self.parsers = (ProcessPoolExecutor(
+                parse_workers, mp_context=context, initializer=initialize_parser,
+                initargs=(self.parser_stop,),
+            ) if process_parsers else None)
+        except (OSError, RuntimeError) as exc:
+            raise ScanError(f"CPU_PARSER_START_FAILED: {type(exc).__name__}; try --thread-parsers") from exc
+        self.parse_slots = threading.BoundedSemaphore(parse_workers)
+        self.layer_slots = threading.BoundedSemaphore(workers * 2)
+        self.cache_limit = cache_mib * 1024 * 1024
+        self.cache_bytes = 0
+        self.cache: OrderedDict[tuple[str, int, str], tuple[Layer, int]] = OrderedDict()
+        self.inflight: dict[tuple[int, str, tuple[str, int, str]], Future[Layer]] = {}
+        self.guard = threading.RLock()
+        self.report_lock = threading.RLock()
+        self.first_access_error: AccessDeniedError | None = None
+
+    def deny(self, error: AccessDeniedError) -> None:
+        with self.guard:
+            if self.first_access_error is None:
+                error.sealed = True
+                self.first_access_error = error
+                print(f"Stopping scan: {error}", file=sys.stderr, flush=True)
+            self.stop.set()
+            if self.parser_stop:
+                self.parser_stop.set()
+
+    def check(self) -> None:
+        if self.stop.is_set():
+            with self.guard:
+                if self.first_access_error:
+                    raise self.first_access_error
+            raise ScanError("CANCELLED")
+
+    def __enter__(self) -> Parallelism:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        if isinstance(exc_value, AccessDeniedError):
+            self.deny(exc_value)
+        elif exc_type is not None:
+            self.stop.set()
+            if self.parser_stop:
+                self.parser_stop.set()
+        # Cancel all queues before waiting for coordinators that depend on those pools.
+        for pool in (self.registries, self.images, self.layers, self.metadata):
+            pool.shutdown(wait=False, cancel_futures=True)
+        for pool in (self.registries, self.images, self.layers, self.metadata):
+            pool.shutdown(wait=True, cancel_futures=True)
+        if self.parsers:
+            self.parsers.shutdown(wait=True, cancel_futures=True)
+
+    def layer(self, registry: Registry, repository: str, descriptor: dict[str, object],
+              limits: Limits) -> Future[Layer]:
+        self.check()
+        digest = digest_value(descriptor.get("digest"))
+        size = descriptor.get("size")
+        media = string_value(descriptor.get("mediaType"), "layer mediaType")
+        if type(size) is not int or size < 0 or size > limits.layer:
+            raise ScanError("INVALID_OR_EXCESSIVE_LAYER_SIZE")
+        key = digest, size, media
+        pending_key = id(registry), repository, key
+
+        def existing() -> Future[Layer] | None:
+            if key in self.cache:
+                value, _ = self.cache[key]
+                self.cache.move_to_end(key)
+                ready: Future[Layer] = Future()
+                ready.set_result(value)
+                return ready
+            return self.inflight.get(pending_key)
+
+        with self.guard:
+            found = existing()
+            if found:
+                return found
+        self.layer_slots.acquire()
+        with self.guard:
+            try:
+                self.check()
+            except ScanError:
+                self.layer_slots.release()
+                raise
+            found = existing()
+            if found:
+                self.layer_slots.release()
+                return found
+
+            def load() -> Layer:
+                if self.stop.is_set():
+                    raise ScanError("CANCELLED")
+                with tempfile.TemporaryDirectory(prefix="acr-layer-") as directory:
+                    path = str(Path(directory) / "layer")
+                    with open(path, "wb") as file:
+                        registry.blob(repository, descriptor, file, limits.layer)
+                    with self.parse_slots:
+                        if self.parsers and size >= 8 * 1024 * 1024:
+                            try:
+                                return self.parsers.submit(
+                                    parse_layer_file, path, digest, limits.file, limits.unpacked,
+                                ).result()
+                            except (BrokenProcessPool, OSError) as exc:
+                                raise ScanError(
+                                    f"CPU_PARSER_FAILED: {type(exc).__name__}; try --thread-parsers",
+                                ) from exc
+                        with open(path, "rb") as file:
+                            return scan_layer(file, digest, limits.file, limits.unpacked, self.stop)
+
+            try:
+                future = self.layers.submit(load)
+            except RuntimeError:
+                self.layer_slots.release()
+                raise
+            self.inflight[pending_key] = future
+
+            def completed(done: Future[Layer]) -> None:
+                with self.guard:
+                    self.inflight.pop(pending_key, None)
+                    if not done.cancelled() and done.exception() is None:
+                        value = done.result()
+                        # Conservative metadata budget; it excludes active parsers and image state.
+                        weight = sum(512 + 4 * (len(c.path) + len(c.target)
+                                     + (len(c.component.note) if c.component else 0))
+                                     for c in value.changes)
+                        weight += sum(256 + 4 * len(p) for p in (*value.whiteouts, *value.opaque))
+                        if weight <= self.cache_limit:
+                            if key in self.cache:
+                                self.cache_bytes -= self.cache.pop(key)[1]
+                            self.cache[key] = value, weight
+                            self.cache_bytes += weight
+                            while self.cache_bytes > self.cache_limit:
+                                _, (_, removed) = self.cache.popitem(last=False)
+                                self.cache_bytes -= removed
+                self.layer_slots.release()
+
+            future.add_done_callback(completed)
+            return future
+
+
+def analyze(registry: Registry, target: Target, cache: dict[str, Layer], limits: Limits,
+            parallel: Parallelism | None = None) -> Analysis:
     manifest = target.manifest
     artifact_type = manifest.get("artifactType")
     if artifact_type is not None and not isinstance(artifact_type, str):
@@ -705,15 +1304,28 @@ def analyze(registry: Registry, target: Target, cache: dict[str, Layer], limits:
     state: dict[str, Component] = {}
     links: set[str] = set()
     for descriptor in descriptors:
-        digest = digest_value(descriptor.get("digest"))
         if string_value(descriptor.get("mediaType"), "layer mediaType") not in LAYER_TYPES:
             raise ScanError("UNSUPPORTED_LAYER_MEDIA_TYPE")
-        if digest not in cache:
+
+    pending: deque[Future[Layer]] = deque()
+    if parallel:
+        for descriptor in descriptors[:2]:
+            pending.append(parallel.layer(registry, target.repository, descriptor, limits))
+    for index, descriptor in enumerate(descriptors):
+        digest = digest_value(descriptor.get("digest"))
+        if parallel:
+            value = pending.popleft().result()
+            if index + 2 < len(descriptors):
+                pending.append(parallel.layer(registry, target.repository, descriptors[index + 2], limits))
+        elif digest not in cache:
             with tempfile.TemporaryFile() as file:
                 registry.blob(target.repository, descriptor, file, limits.layer)
                 file.seek(0)
                 cache[digest] = scan_layer(file, digest, limits.file, limits.unpacked)
-        apply_layer(state, links, cache[digest])
+            value = cache[digest]
+        else:
+            value = cache[digest]
+        apply_layer(state, links, value)
     components = sorted(state.values(), key=lambda component: component.path)
     raw_config = settings.get("config")
     config_values = {} if raw_config is None else object_value(raw_config, "image runtime config")
@@ -759,11 +1371,13 @@ def csv_cell(value: object) -> str:
 
 class Report:
     def __init__(self, stream: TextIO, registry: str, *, header: bool = True,
-                 context: dict[str, str] | None = None, summary_type: str = "SUMMARY") -> None:
+                 context: dict[str, str] | None = None, summary_type: str = "SUMMARY",
+                 lock: threading.RLock | None = None) -> None:
         self.stream = stream
         self.registry = registry
         self.context = context or {}
         self.summary_type = summary_type
+        self.lock = lock or threading.RLock()
         self.writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
         if header:
             self.writer.writeheader()
@@ -774,8 +1388,9 @@ class Report:
             "ScannedAtUtc": datetime.now(timezone.utc).isoformat(), **self.context,
             **values,
         }
-        self.writer.writerow({key: csv_cell(value) for key, value in row.items()})
-        self.stream.flush()
+        with self.lock:
+            self.writer.writerow({key: csv_cell(value) for key, value in row.items()})
+            self.stream.flush()
 
     def issue(self, issue: Issue, status: str = "ERROR") -> None:
         self.write(
@@ -827,21 +1442,35 @@ class Report:
             )
 
 
-def scan(registry: Registry, report: Report, limits: Limits) -> int:
-    snapshot = inventory(registry)
+def scan(registry: Registry, report: Report, limits: Limits, parallel: Parallelism | None = None) -> int:
+    snapshot = inventory(registry, parallel)
     for issue in snapshot.issues:
         report.issue(issue)
     counts: Counter[str] = Counter()
     cache: dict[str, Layer] = {}
-    for number, target in enumerate(snapshot.targets.values(), 1):
-        print(f"[{number}/{len(snapshot.targets)}] {target.repository}@{target.digest}", file=sys.stderr)
+    def inspect(target: Target) -> tuple[Target, Analysis]:
         try:
-            result = analyze(registry, target, cache, limits)
+            if parallel:
+                parallel.check()
+            result = analyze(registry, target, cache, limits, parallel)
+        except AccessDeniedError as exc:
+            error = exc.at(Repository=target.repository, Digest=target.digest)
+            if parallel:
+                parallel.deny(error)
+            raise error
         except ScanError as exc:
             result = Analysis("ERROR", complete=False, notes=str(exc))
+        return target, result
+
+    for number, (target, result) in enumerate(bounded_map(
+        parallel.images if parallel else None, inspect, snapshot.targets.values(),
+        parallel.workers * 2 if parallel else 1,
+        check=parallel.check if parallel else None,
+    ), 1):
+        print(f"[{number}/{len(snapshot.targets)}] {target.repository}@{target.digest}", file=sys.stderr)
         counts[result.status] += 1
         report.image(target, result)
-    after, after_issues = catalog(registry)
+    after, after_issues = catalog(registry, parallel)
     for issue in after_issues:
         report.issue(issue)
     current = {
@@ -898,10 +1527,14 @@ class ScopeInventory:
     issues: list[tuple[str, str]] = field(default_factory=list)
 
 
-def arm_pages(url: str, subscription: str | None = None) -> Iterator[dict[str, object]]:
+def arm_pages(url: str, subscription: str | None = None,
+              stop: threading.Event | None = None,
+              auth: AzureIdentityAuth | None = None) -> Iterator[dict[str, object]]:
     origin = urllib.parse.urlsplit(url)
     seen: set[str] = set()
     while url:
+        if stop and stop.is_set():
+            raise ScanError("CANCELLED")
         parsed = urllib.parse.urlsplit(url)
         if (parsed.scheme != "https" or parsed.netloc != origin.netloc
                 or parsed.path != origin.path or parsed.fragment
@@ -911,7 +1544,7 @@ def arm_pages(url: str, subscription: str | None = None) -> Iterator[dict[str, o
         arguments = ["rest", "--method", "get", "--url", url]
         if subscription:
             arguments.extend(["--subscription", subscription])
-        page = object_value(run_az(arguments), "ARM page")
+        page = auth.arm_json(url) if auth else object_value(run_az(arguments), "ARM page")
         for item in list_value(page.get("value"), "ARM page value"):
             yield object_value(item, "ARM resource")
         next_link = page.get("nextLink")
@@ -919,12 +1552,13 @@ def arm_pages(url: str, subscription: str | None = None) -> Iterator[dict[str, o
                if next_link is not None else "")
 
 
-def discover_scope(group: str, arm: str) -> ScopeInventory:
+def discover_scope(group: str, arm: str, parallel: Parallelism | None = None,
+                   auth: AzureIdentityAuth | None = None) -> ScopeInventory:
     result = ScopeInventory()
     url = (f"{arm}/providers/Microsoft.Management/managementGroups/"
            f"{urllib.parse.quote(group, safe='')}/descendants?api-version=2020-05-01")
     try:
-        for item in arm_pages(url):
+        for item in arm_pages(url, stop=parallel.stop if parallel else None, auth=auth):
             resource_id = string_value(item.get("id"), "descendant id")
             if not resource_id.lower().startswith("/subscriptions/"):
                 if string_value(item.get("type"), "descendant type").lower() != "microsoft.management/managementgroups":
@@ -941,12 +1575,23 @@ def discover_scope(group: str, arm: str) -> ScopeInventory:
             result.subscriptions[subscription] = string_value(
                 properties.get("displayName"), "subscription display name",
             )
+    except AccessDeniedError as exc:
+        error = exc.at(ManagementGroup=group)
+        if parallel:
+            parallel.deny(error)
+        raise error
     except ScanError as exc:
         result.issues.append(("", f"MANAGEMENT_GROUP_DISCOVERY_FAILED: {exc}"))
-    for subscription, name in result.subscriptions.items():
+    def read_subscription(item: tuple[str, str]) -> tuple[list[ScopedRegistry], tuple[str, str] | None]:
+        subscription, name = item
+        entries: list[ScopedRegistry] = []
+        issue = None
         prefix = f"/subscriptions/{subscription}/providers/Microsoft.ContainerRegistry/registries"
         try:
-            for item in arm_pages(f"{arm}{prefix}?api-version=2023-07-01", subscription):
+            if parallel:
+                parallel.check()
+            for item in arm_pages(f"{arm}{prefix}?api-version=2023-07-01", subscription,
+                                  parallel.stop if parallel else None, auth):
                 resource_id = string_value(item.get("id"), "registry id")
                 expected = re.fullmatch(
                     rf"/subscriptions/{re.escape(subscription)}/resourceGroups/[^/]+"
@@ -955,22 +1600,38 @@ def discover_scope(group: str, arm: str) -> ScopeInventory:
                 )
                 if not expected or item.get("name") != expected[1]:
                     raise ScanError("UNEXPECTED_REGISTRY_RESOURCE_ID")
-                result.registries[resource_id.lower()] = ScopedRegistry(
-                    subscription, name, expected[1], resource_id,
-                )
+                entries.append(ScopedRegistry(subscription, name, expected[1], resource_id))
+        except AccessDeniedError as exc:
+            error = exc.at(ManagementGroup=group, SubscriptionId=subscription)
+            if parallel:
+                parallel.deny(error)
+            raise error
         except ScanError as exc:
-            result.issues.append((subscription, f"REGISTRY_DISCOVERY_FAILED: {exc}"))
+            issue = subscription, f"REGISTRY_DISCOVERY_FAILED: {exc}"
+        return entries, issue
+
+    for entries, issue in bounded_map(parallel.metadata if parallel else None,
+                                      read_subscription, result.subscriptions.items(),
+                                      check=parallel.check if parallel else None):
+        for entry in entries:
+            result.registries[entry.resource_id.lower()] = entry
+        if issue:
+            result.issues.append(issue)
     return result
 
 
-def scan_management_group(group: str, report: Report, limits: Limits, timeout: int) -> int:
-    endpoints = object_value(
-        object_value(run_az(["cloud", "show"]), "Azure cloud").get("endpoints"), "cloud endpoints",
-    )
-    arm = string_value(endpoints.get("resourceManager"), "ARM endpoint").rstrip("/")
+def scan_management_group(group: str, report: Report, limits: Limits, timeout: int,
+                          parallel: Parallelism | None = None, auth: AzureIdentityAuth | None = None) -> int:
+    if auth:
+        arm = auth.arm
+    else:
+        endpoints = object_value(
+            object_value(run_az(["cloud", "show"]), "Azure cloud").get("endpoints"), "cloud endpoints",
+        )
+        arm = string_value(endpoints.get("resourceManager"), "ARM endpoint").rstrip("/")
     if not re.fullmatch(r"https://[A-Za-z0-9.-]+", arm):
         raise ScanError("INVALID_ARM_ENDPOINT")
-    before = discover_scope(group, arm)
+    before = discover_scope(group, arm, parallel, auth)
     codes: list[int] = []
 
     def discovery_errors(snapshot: ScopeInventory) -> None:
@@ -988,20 +1649,36 @@ def scan_management_group(group: str, report: Report, limits: Limits, timeout: i
                      Notes=json.dumps({"registries_discovered": sum(
                          entry.subscription == subscription for entry in before.registries.values()
                      )}))
-    for entry in before.registries.values():
+    def inspect_registry(entry: ScopedRegistry) -> int:
         child = Report(report.stream, entry.name, header=False, summary_type="REGISTRY_SUMMARY",
                        context={"ManagementGroup": group, "SubscriptionId": entry.subscription,
-                                "SubscriptionName": entry.subscription_name, "RegistryId": entry.resource_id})
+                                "SubscriptionName": entry.subscription_name, "RegistryId": entry.resource_id},
+                       lock=report.lock)
         print(f"Registry: {entry.subscription}/{entry.name}", file=sys.stderr)
         try:
-            registry = AzureRegistry(entry.name, timeout, subscription=entry.subscription)
-            codes.append(scan(registry, child, limits))
+            if parallel:
+                parallel.check()
+            registry = (AzureRegistry(entry.name, timeout, subscription=entry.subscription,
+                                      auth=auth, resource_id=entry.resource_id)
+                        if auth else AzureRegistry(entry.name, timeout, subscription=entry.subscription))
+            if parallel:
+                registry.stop = parallel.stop
+            return scan(registry, child, limits, parallel)
+        except AccessDeniedError as exc:
+            error = exc.at(ManagementGroup=group, Registry=entry.name,
+                           SubscriptionId=entry.subscription, RegistryId=entry.resource_id)
+            if parallel:
+                parallel.deny(error)
+            raise error
         except ScanError as exc:
             child.issue(Issue("", "", str(exc)))
             child.write("REGISTRY_SUMMARY", ImageStatus="INCOMPLETE", InventoryComplete="FALSE",
                         CoverageComplete="FALSE", ReviewRequired="TRUE", Notes=str(exc))
-            codes.append(2)
-    after = discover_scope(group, arm)
+            return 2
+    codes.extend(bounded_map(parallel.registries if parallel else None,
+                             inspect_registry, before.registries.values(), 8,
+                             check=parallel.check if parallel else None))
+    after = discover_scope(group, arm, parallel, auth)
     discovery_errors(after)
     changed = (before.subscriptions.keys() != after.subscriptions.keys()
                or before.registries.keys() != after.registries.keys())
@@ -1031,19 +1708,42 @@ def main(argv: list[str] | None = None) -> int:
     scope.add_argument("--registry", help="Azure registry resource name, not a URL")
     scope.add_argument("--management-group", type=management_group_id,
                        help="Management group ID or ARM ID; scans all descendant subscriptions")
-    parser.add_argument("--subscription", help="Subscription ID/name for --registry only")
+    parser.add_argument("--subscription", help="Subscription ID for --registry (legacy CLI also accepts a name)")
+    parser.add_argument("--resource-group", help="Registry resource group; permits direct ARM lookup with ACR-scoped Reader")
+    parser.add_argument("--auth", choices=("default", "azure-cli"), default="default",
+                        help="DefaultAzureCredential (default) or explicit legacy Azure CLI mode")
+    parser.add_argument("--managed-identity-client-id", help="User-assigned managed identity client ID")
+    parser.add_argument("--cloud", choices=tuple(CLOUDS), default="AzureCloud")
     parser.add_argument("--output", type=Path, help="New CSV path; existing files are never overwritten")
     parser.add_argument("--max-layer-mib", type=int, default=1024)
     parser.add_argument("--max-file-mib", type=int, default=256)
     parser.add_argument("--max-unpacked-layer-mib", type=int, default=8192)
     parser.add_argument("--timeout", type=int, default=60, help="HTTPS timeout in seconds")
+    parser.add_argument("--workers", type=int, default=8, help="Global image/download concurrency (default: 8)")
+    parser.add_argument("--registry-workers", type=int, default=4, help="Concurrent registry coordinators (default: 4)")
+    parser.add_argument("--metadata-workers", type=int, default=8, help="Global ARM/manifest/CLI workers (default: 8)")
+    parser.add_argument("--parse-workers", type=int, default=2, help="Concurrent memory-heavy layer parsers (default: 2)")
+    parser.add_argument("--cache-mib", type=int, default=256, help="Approximate completed layer metadata cache budget")
+    parser.add_argument("--serial", action="store_true", help="Disable all concurrency for comparison/troubleshooting")
+    parser.add_argument("--thread-parsers", action="store_true",
+                        help="Use threads instead of processes for large-layer CPU analysis")
     args = parser.parse_args(argv)
     if args.registry and not re.fullmatch(r"[A-Za-z0-9]{5,50}", args.registry):
         parser.error("--registry must be a 5-50 character alphanumeric ACR resource name")
     if args.management_group and args.subscription:
         parser.error("--subscription is only valid with --registry")
+    if args.management_group and args.resource_group:
+        parser.error("--resource-group is only valid with --registry")
+    if args.auth == "azure-cli" and (args.managed_identity_client_id or args.resource_group):
+        parser.error("--managed-identity-client-id and --resource-group require --auth default")
     if min(args.max_layer_mib, args.max_file_mib, args.max_unpacked_layer_mib, args.timeout) <= 0:
         parser.error("size limits and timeout must be positive")
+    if not all(1 <= value <= 64 for value in (
+        args.workers, args.registry_workers, args.metadata_workers, args.parse_workers,
+    )):
+        parser.error("worker counts must be between 1 and 64")
+    if args.cache_mib < 0:
+        parser.error("--cache-mib must not be negative")
     output = args.output or Path(
         f"{args.management_group or args.registry}-runtime-cves-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.csv"
     )
@@ -1059,12 +1759,48 @@ def main(argv: list[str] | None = None) -> int:
                             context={"ManagementGroup": args.management_group or "",
                                      "SubscriptionId": args.subscription or ""})
             try:
-                if args.management_group:
-                    exit_code = scan_management_group(args.management_group, report, limits, args.timeout)
-                else:
-                    registry = (AzureRegistry(args.registry, args.timeout, subscription=args.subscription)
-                                if args.subscription else AzureRegistry(args.registry, args.timeout))
-                    exit_code = scan(registry, report, limits)
+                started = time.perf_counter()
+                with ExitStack() as credentials, Parallelism(
+                    1 if args.serial else args.workers,
+                    1 if args.serial else args.registry_workers,
+                    1 if args.serial else args.metadata_workers,
+                    1 if args.serial else args.parse_workers, args.cache_mib,
+                    not (args.serial or args.thread_parsers),
+                ) as parallel:
+                    auth = create_auth(args)
+                    if auth:
+                        auth.stop = parallel.stop
+                        credentials.callback(auth.close)
+                    if args.management_group:
+                        exit_code = scan_management_group(args.management_group, report, limits,
+                                                          args.timeout, parallel, auth)
+                    else:
+                        if auth:
+                            subscription = args.subscription or os.environ.get("AZURE_SUBSCRIPTION_ID")
+                            resource_id = None
+                            if args.resource_group:
+                                if not subscription:
+                                    raise ScanError("SUBSCRIPTION_REQUIRED_WITH_RESOURCE_GROUP")
+                                resource_id = (f"/subscriptions/{urllib.parse.quote(subscription, safe='')}"
+                                               f"/resourceGroups/{urllib.parse.quote(args.resource_group, safe='')}"
+                                               f"/providers/Microsoft.ContainerRegistry/registries/{args.registry}")
+                            registry = AzureRegistry(args.registry, args.timeout, subscription=subscription,
+                                                     auth=auth, resource_id=resource_id)
+                        else:
+                            registry = (AzureRegistry(args.registry, args.timeout, subscription=args.subscription)
+                                        if args.subscription else AzureRegistry(args.registry, args.timeout))
+                        registry.stop = parallel.stop
+                        exit_code = scan(registry, report, limits, parallel)
+                print(f"Elapsed: {time.perf_counter() - started:.2f}s", file=sys.stderr)
+            except AccessDeniedError as exc:
+                report.write("PERMISSION_ERROR", **exc.context, ImageStatus="ACCESS_DENIED",
+                             InventoryComplete="FALSE", CoverageComplete="FALSE",
+                             ReviewRequired="TRUE", Notes=str(exc))
+                report.write(summary_type, ImageStatus="ABORTED_ACCESS_DENIED",
+                             InventoryComplete="FALSE", CoverageComplete="FALSE",
+                             ReviewRequired="TRUE", Notes=str(exc))
+                print(f"Stopped: {exc}", file=sys.stderr, flush=True)
+                exit_code = 2
             except ScanError as exc:
                 report.issue(Issue("", "", str(exc)))
                 report.write(summary_type, ImageStatus="INCOMPLETE", InventoryComplete="FALSE",
