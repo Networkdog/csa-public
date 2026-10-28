@@ -181,12 +181,28 @@ class AccessDeniedError(ScanError):
         return str(self.args[0]) + (f" [{location}]" if location else "")
 
 
-def access_denied(operation: str, status: int, hint: str, **context: str) -> AccessDeniedError:
-    return AccessDeniedError(
-        f"ACCESS_DENIED: {operation}; HTTP {status}. {hint}. "
-        "For HTTP 403, also verify Public Network Access, Private Endpoint DNS and firewall policy",
-        context,
+class ForbiddenSkippedError(ScanError):
+    def __init__(self, reason: str, context: dict[str, str] | None = None) -> None:
+        self.reason = reason
+        self.context = context or {}
+        super().__init__(str(AccessDeniedError(reason, self.context)))
+
+    def at(self, **context: str) -> ForbiddenSkippedError:
+        return ForbiddenSkippedError(self.reason, {**context, **self.context})
+
+
+def access_denied(operation: str, status: int, hint: str,
+                  **context: str) -> AccessDeniedError | ForbiddenSkippedError:
+    reason = (
+        f"{'FORBIDDEN_SKIPPED' if status == 403 else 'ACCESS_DENIED'}: "
+        f"{operation}; HTTP {status}. {hint}. "
+        "For HTTP 403, also verify Public Network Access, Private Endpoint DNS and firewall policy"
     )
+    if status == 403:
+        error = ForbiddenSkippedError(reason, context)
+        print(f"Skipping denied operation: {error}", file=sys.stderr, flush=True)
+        return error
+    return AccessDeniedError(reason, context)
 
 
 def object_value(value: object, label: str) -> dict[str, object]:
@@ -232,8 +248,9 @@ def run_az(arguments: list[str]) -> object:
         )
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
         raise ScanError(f"AZURE_CLI_EXECUTION_FAILED: {type(exc).__name__}") from exc
-    if re.search(
-        r"AuthorizationFailed|AuthorizationPermissionMismatch|AccessDenied|Forbidden|Unauthorized|\bdenied\b"
+    forbidden = bool(re.search(r"\bForbidden\b|\bHTTP\s*403\b|\b403\b", result.stderr, re.IGNORECASE))
+    if forbidden or re.search(
+        r"AuthorizationFailed|AuthorizationPermissionMismatch|AccessDenied|Unauthorized|\bdenied\b"
         r"|authentication required|insufficient (?:privileges|permissions)"
         r"|does not have authorization|AADSTS\d+|please run.{0,30}az login|not logged in",
         result.stderr, re.IGNORECASE,
@@ -244,6 +261,12 @@ def run_az(arguments: list[str]) -> object:
                 context[field] = arguments[arguments.index(flag) + 1]
         if arguments[:2] == ["acr", "login"] and "--name" in arguments:
             context["Registry"] = arguments[arguments.index("--name") + 1]
+        if forbidden:
+            raise access_denied(
+                "Azure CLI " + " ".join(arguments[:3]), 403,
+                "check Reader and AcrPull or ABAC Repository Reader + Catalog Lister at the intended scope",
+                **context,
+            )
         raise AccessDeniedError(
             "AZURE_CLI_ACCESS_DENIED: " + " ".join(arguments[:3])
             + "; check az login/tenant and Reader plus AcrPull or "
@@ -615,7 +638,7 @@ class AzureRegistry:
         raise ScanError("REGISTRY_AUTHENTICATION_FAILED")
 
     def _denied(self, operation: str, status: int, repository: str = "",
-                permission: str = "pull") -> AccessDeniedError:
+                permission: str = "pull") -> AccessDeniedError | ForbiddenSkippedError:
         hint = ("AcrPull (legacy), or Container Registry Repository Catalog Lister (ABAC)"
                 if not repository else
                 "AcrPull (legacy), or Container Registry Repository Reader (ABAC): "
