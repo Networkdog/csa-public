@@ -95,7 +95,8 @@ NODE_NAME = re.compile(
 )
 
 FIELDS = (
-    "RecordType", "Registry", "Repository", "Digest", "Tags", "IndexDigests",
+    "RecordType", "ManagementGroup", "SubscriptionId", "SubscriptionName",
+    "RegistryId", "Registry", "Repository", "Digest", "Tags", "IndexDigests",
     "IndexTags", "OS", "Architecture", "Variant", "ImageStatus", "RuntimeFamily",
     "ComponentPath", "RuntimeVersion", "PHPVersion", "NodeVersion", "Evidence",
     "LayerDigest", *CVE_IDS, "PatchVerification", "ReviewRequired",
@@ -192,8 +193,9 @@ class Registry(Protocol):
 
 
 class AzureRegistry:
-    def __init__(self, name: str, timeout: int = 60) -> None:
+    def __init__(self, name: str, timeout: int = 60, subscription: str | None = None) -> None:
         self.name = name
+        self.subscription = subscription
         self.timeout = timeout
         self.opener = urllib.request.build_opener(NoRedirect())
         self.server = ""
@@ -201,9 +203,14 @@ class AzureRegistry:
         self.tokens: dict[str, tuple[str, float]] = {}
         self._login()
 
+    def _cli(self, arguments: list[str]) -> object:
+        if self.subscription:
+            arguments = [*arguments, "--subscription", self.subscription]
+        return run_az(arguments)
+
     def _login(self) -> None:
         login = object_value(
-            run_az(["acr", "login", "--name", self.name, "--expose-token"]),
+            self._cli(["acr", "login", "--name", self.name, "--expose-token"]),
             "Azure CLI login response",
         )
         server = string_value(login.get("loginServer"), "loginServer").lower()
@@ -303,12 +310,12 @@ class AzureRegistry:
         raise ScanError("REGISTRY_AUTHENTICATION_FAILED")
 
     def repositories(self) -> Iterator[str]:
-        result = list_value(run_az(["acr", "repository", "list", "--name", self.name]), "repositories")
+        result = list_value(self._cli(["acr", "repository", "list", "--name", self.name]), "repositories")
         for item in result:
             yield string_value(item, "repository")
 
     def manifests(self, repository: str) -> Iterator[ManifestRef]:
-        items = list_value(run_az([
+        items = list_value(self._cli([
             "acr", "manifest", "list-metadata", "--registry", self.name,
             "--name", repository, "--query", "[]",
         ]), "manifests")
@@ -751,16 +758,20 @@ def csv_cell(value: object) -> str:
 
 
 class Report:
-    def __init__(self, stream: TextIO, registry: str) -> None:
+    def __init__(self, stream: TextIO, registry: str, *, header: bool = True,
+                 context: dict[str, str] | None = None, summary_type: str = "SUMMARY") -> None:
         self.stream = stream
         self.registry = registry
+        self.context = context or {}
+        self.summary_type = summary_type
         self.writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
-        self.writer.writeheader()
+        if header:
+            self.writer.writeheader()
 
     def write(self, record_type: str, **values: object) -> None:
         row = {
             "RecordType": record_type, "Registry": self.registry,
-            "ScannedAtUtc": datetime.now(timezone.utc).isoformat(),
+            "ScannedAtUtc": datetime.now(timezone.utc).isoformat(), **self.context,
             **values,
         }
         self.writer.writerow({key: csv_cell(value) for key, value in row.items()})
@@ -851,7 +862,7 @@ def scan(registry: Registry, report: Report, limits: Limits) -> int:
         1 if counts["AFFECTED_VERSION_DETECTED"] else (3 if counts["UNKNOWN"] else 0)
     )
     report.write(
-        "SUMMARY", ImageStatus="INCOMPLETE" if operational_error else "SCAN_FINISHED",
+        report.summary_type, ImageStatus="INCOMPLETE" if operational_error else "SCAN_FINISHED",
         InventoryComplete=str(inventory_complete).upper(),
         CoverageComplete=str(not operational_error).upper(), ReviewRequired="TRUE",
         Notes=json.dumps({
@@ -863,21 +874,178 @@ def scan(registry: Registry, report: Report, limits: Limits) -> int:
     return exit_code
 
 
+def management_group_id(value: str) -> str:
+    prefix = "/providers/Microsoft.Management/managementGroups/"
+    if value.lower().startswith(prefix.lower()):
+        value = value[len(prefix):]
+    if not re.fullmatch(r"[A-Za-z0-9_().-]{1,90}", value) or value in (".", ".."):
+        raise argparse.ArgumentTypeError("Use a management group ID or its full ARM resource ID")
+    return value
+
+
+@dataclass(frozen=True)
+class ScopedRegistry:
+    subscription: str
+    subscription_name: str
+    name: str
+    resource_id: str
+
+
+@dataclass
+class ScopeInventory:
+    subscriptions: dict[str, str] = field(default_factory=dict)
+    registries: dict[str, ScopedRegistry] = field(default_factory=dict)
+    issues: list[tuple[str, str]] = field(default_factory=list)
+
+
+def arm_pages(url: str, subscription: str | None = None) -> Iterator[dict[str, object]]:
+    origin = urllib.parse.urlsplit(url)
+    seen: set[str] = set()
+    while url:
+        parsed = urllib.parse.urlsplit(url)
+        if (parsed.scheme != "https" or parsed.netloc != origin.netloc
+                or parsed.path != origin.path or parsed.fragment
+                or parsed.username or parsed.password or url in seen):
+            raise ScanError("INVALID_OR_REPEATED_ARM_NEXT_LINK")
+        seen.add(url)
+        arguments = ["rest", "--method", "get", "--url", url]
+        if subscription:
+            arguments.extend(["--subscription", subscription])
+        page = object_value(run_az(arguments), "ARM page")
+        for item in list_value(page.get("value"), "ARM page value"):
+            yield object_value(item, "ARM resource")
+        next_link = page.get("nextLink")
+        url = (urllib.parse.urljoin(url, string_value(next_link, "ARM nextLink"))
+               if next_link is not None else "")
+
+
+def discover_scope(group: str, arm: str) -> ScopeInventory:
+    result = ScopeInventory()
+    url = (f"{arm}/providers/Microsoft.Management/managementGroups/"
+           f"{urllib.parse.quote(group, safe='')}/descendants?api-version=2020-05-01")
+    try:
+        for item in arm_pages(url):
+            resource_id = string_value(item.get("id"), "descendant id")
+            if not resource_id.lower().startswith("/subscriptions/"):
+                if string_value(item.get("type"), "descendant type").lower() != "microsoft.management/managementgroups":
+                    raise ScanError("UNEXPECTED_MANAGEMENT_GROUP_DESCENDANT")
+                continue
+            match = re.fullmatch(
+                r"/subscriptions/([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})",
+                resource_id,
+            )
+            if not match:
+                raise ScanError("INVALID_DESCENDANT_SUBSCRIPTION_ID")
+            subscription = match[1].lower()
+            properties = object_value(item.get("properties"), "subscription properties")
+            result.subscriptions[subscription] = string_value(
+                properties.get("displayName"), "subscription display name",
+            )
+    except ScanError as exc:
+        result.issues.append(("", f"MANAGEMENT_GROUP_DISCOVERY_FAILED: {exc}"))
+    for subscription, name in result.subscriptions.items():
+        prefix = f"/subscriptions/{subscription}/providers/Microsoft.ContainerRegistry/registries"
+        try:
+            for item in arm_pages(f"{arm}{prefix}?api-version=2023-07-01", subscription):
+                resource_id = string_value(item.get("id"), "registry id")
+                expected = re.fullmatch(
+                    rf"/subscriptions/{re.escape(subscription)}/resourceGroups/[^/]+"
+                    r"/providers/Microsoft.ContainerRegistry/registries/([A-Za-z0-9]{5,50})",
+                    resource_id, re.IGNORECASE,
+                )
+                if not expected or item.get("name") != expected[1]:
+                    raise ScanError("UNEXPECTED_REGISTRY_RESOURCE_ID")
+                result.registries[resource_id.lower()] = ScopedRegistry(
+                    subscription, name, expected[1], resource_id,
+                )
+        except ScanError as exc:
+            result.issues.append((subscription, f"REGISTRY_DISCOVERY_FAILED: {exc}"))
+    return result
+
+
+def scan_management_group(group: str, report: Report, limits: Limits, timeout: int) -> int:
+    endpoints = object_value(
+        object_value(run_az(["cloud", "show"]), "Azure cloud").get("endpoints"), "cloud endpoints",
+    )
+    arm = string_value(endpoints.get("resourceManager"), "ARM endpoint").rstrip("/")
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+", arm):
+        raise ScanError("INVALID_ARM_ENDPOINT")
+    before = discover_scope(group, arm)
+    codes: list[int] = []
+
+    def discovery_errors(snapshot: ScopeInventory) -> None:
+        for subscription, message in snapshot.issues:
+            report.write("SCOPE_ERROR", SubscriptionId=subscription, ImageStatus="ERROR",
+                         InventoryComplete="FALSE", CoverageComplete="FALSE",
+                         ReviewRequired="TRUE", Notes=message)
+            codes.append(2)
+
+    discovery_errors(before)
+    failed_subscriptions = {subscription for subscription, _ in before.issues}
+    for subscription, name in before.subscriptions.items():
+        report.write("SUBSCRIPTION", SubscriptionId=subscription, SubscriptionName=name,
+                     ImageStatus="DISCOVERY_ERROR" if subscription in failed_subscriptions else "DISCOVERED",
+                     Notes=json.dumps({"registries_discovered": sum(
+                         entry.subscription == subscription for entry in before.registries.values()
+                     )}))
+    for entry in before.registries.values():
+        child = Report(report.stream, entry.name, header=False, summary_type="REGISTRY_SUMMARY",
+                       context={"ManagementGroup": group, "SubscriptionId": entry.subscription,
+                                "SubscriptionName": entry.subscription_name, "RegistryId": entry.resource_id})
+        print(f"Registry: {entry.subscription}/{entry.name}", file=sys.stderr)
+        try:
+            registry = AzureRegistry(entry.name, timeout, subscription=entry.subscription)
+            codes.append(scan(registry, child, limits))
+        except ScanError as exc:
+            child.issue(Issue("", "", str(exc)))
+            child.write("REGISTRY_SUMMARY", ImageStatus="INCOMPLETE", InventoryComplete="FALSE",
+                        CoverageComplete="FALSE", ReviewRequired="TRUE", Notes=str(exc))
+            codes.append(2)
+    after = discover_scope(group, arm)
+    discovery_errors(after)
+    changed = (before.subscriptions.keys() != after.subscriptions.keys()
+               or before.registries.keys() != after.registries.keys())
+    if changed:
+        codes.append(2)
+        report.write("SCOPE_ERROR", ImageStatus="INVENTORY_CHANGED", InventoryComplete="FALSE",
+                     CoverageComplete="FALSE", ReviewRequired="TRUE", Notes=json.dumps({
+                         "added_subscriptions": sorted(after.subscriptions.keys() - before.subscriptions.keys()),
+                         "removed_subscriptions": sorted(before.subscriptions.keys() - after.subscriptions.keys()),
+                         "added_registries_not_scanned": sorted(after.registries.keys() - before.registries.keys()),
+                         "removed_registries": sorted(before.registries.keys() - after.registries.keys()),
+                     }))
+    code = next((value for value in (2, 1, 3) if value in codes), 0)
+    report.write("MANAGEMENT_GROUP_SUMMARY",
+                 ImageStatus="INCOMPLETE" if code == 2 else "SCAN_FINISHED",
+                 InventoryComplete=str(code != 2).upper(),
+                 CoverageComplete=str(code != 2).upper(), ReviewRequired="TRUE",
+                 Notes=json.dumps({"subscriptions": len(before.subscriptions),
+                                   "registries": len(before.registries), "exit_code": code,
+                                   "scope": "authorized ARM discovery; not an atomic snapshot; no patch attestation"}))
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registry", required=True, help="Azure registry resource name, not a URL")
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--registry", help="Azure registry resource name, not a URL")
+    scope.add_argument("--management-group", type=management_group_id,
+                       help="Management group ID or ARM ID; scans all descendant subscriptions")
+    parser.add_argument("--subscription", help="Subscription ID/name for --registry only")
     parser.add_argument("--output", type=Path, help="New CSV path; existing files are never overwritten")
     parser.add_argument("--max-layer-mib", type=int, default=1024)
     parser.add_argument("--max-file-mib", type=int, default=256)
     parser.add_argument("--max-unpacked-layer-mib", type=int, default=8192)
     parser.add_argument("--timeout", type=int, default=60, help="HTTPS timeout in seconds")
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[A-Za-z0-9]{5,50}", args.registry):
+    if args.registry and not re.fullmatch(r"[A-Za-z0-9]{5,50}", args.registry):
         parser.error("--registry must be a 5-50 character alphanumeric ACR resource name")
+    if args.management_group and args.subscription:
+        parser.error("--subscription is only valid with --registry")
     if min(args.max_layer_mib, args.max_file_mib, args.max_unpacked_layer_mib, args.timeout) <= 0:
         parser.error("size limits and timeout must be positive")
     output = args.output or Path(
-        f"{args.registry}-runtime-cves-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.csv"
+        f"{args.management_group or args.registry}-runtime-cves-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.csv"
     )
     limits = Limits(
         args.max_layer_mib * 1024 * 1024, args.max_file_mib * 1024 * 1024,
@@ -886,18 +1054,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("x", encoding="utf-8-sig", newline="") as stream:
-            report = Report(stream, args.registry)
+            summary_type = "MANAGEMENT_GROUP_SUMMARY" if args.management_group else "SUMMARY"
+            report = Report(stream, args.registry or "", summary_type=summary_type,
+                            context={"ManagementGroup": args.management_group or "",
+                                     "SubscriptionId": args.subscription or ""})
             try:
-                registry = AzureRegistry(args.registry, args.timeout)
-                exit_code = scan(registry, report, limits)
+                if args.management_group:
+                    exit_code = scan_management_group(args.management_group, report, limits, args.timeout)
+                else:
+                    registry = (AzureRegistry(args.registry, args.timeout, subscription=args.subscription)
+                                if args.subscription else AzureRegistry(args.registry, args.timeout))
+                    exit_code = scan(registry, report, limits)
             except ScanError as exc:
                 report.issue(Issue("", "", str(exc)))
-                report.write("SUMMARY", ImageStatus="INCOMPLETE", InventoryComplete="FALSE",
+                report.write(summary_type, ImageStatus="INCOMPLETE", InventoryComplete="FALSE",
                              CoverageComplete="FALSE", ReviewRequired="TRUE", Notes="Exit code: 2")
                 print(str(exc), file=sys.stderr)
                 exit_code = 2
             except KeyboardInterrupt:
-                report.write("SUMMARY", ImageStatus="INTERRUPTED", InventoryComplete="FALSE",
+                report.write(summary_type, ImageStatus="INTERRUPTED", InventoryComplete="FALSE",
                              CoverageComplete="FALSE", ReviewRequired="TRUE", Notes="Exit code: 130")
                 exit_code = 130
     except OSError as exc:
