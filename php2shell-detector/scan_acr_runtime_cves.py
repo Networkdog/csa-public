@@ -1,4 +1,4 @@
-"""Read-only parallel ACR runtime CVE scanner with DefaultAzureCredential or explicit CLI authentication."""
+"""Read-only parallel ACR runtime CVE scanner using the current az login session."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, OrderedDict, deque
-from contextlib import ExitStack
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
@@ -53,7 +52,10 @@ def bounded_map(pool: ThreadPoolExecutor | None, function: Callable[[T], R],
                 values: Iterable[T], window: int = 16,
                 check: Callable[[], None] | None = None) -> Iterator[R]:
     if pool is None:
-        yield from map(function, values)
+        for value in values:
+            if check:
+                check()
+            yield function(value)
         return
     iterator = iter(values)
     pending: set[Future[R]] = set()
@@ -230,25 +232,25 @@ def run_az(arguments: list[str]) -> object:
         )
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
         raise ScanError(f"AZURE_CLI_EXECUTION_FAILED: {type(exc).__name__}") from exc
+    if re.search(
+        r"AuthorizationFailed|AuthorizationPermissionMismatch|AccessDenied|Forbidden|Unauthorized|\bdenied\b"
+        r"|authentication required|insufficient (?:privileges|permissions)"
+        r"|does not have authorization|AADSTS\d+|please run.{0,30}az login|not logged in",
+        result.stderr, re.IGNORECASE,
+    ):
+        context: dict[str, str] = {}
+        for flag, field in (("--subscription", "SubscriptionId"), ("--registry", "Registry")):
+            if flag in arguments:
+                context[field] = arguments[arguments.index(flag) + 1]
+        if arguments[:2] == ["acr", "login"] and "--name" in arguments:
+            context["Registry"] = arguments[arguments.index("--name") + 1]
+        raise AccessDeniedError(
+            "AZURE_CLI_ACCESS_DENIED: " + " ".join(arguments[:3])
+            + "; check az login/tenant and Reader plus AcrPull or "
+            "ABAC Repository Reader + Catalog Lister at the intended scope",
+            context,
+        )
     if result.returncode:
-        if re.search(
-            r"AuthorizationFailed|AuthorizationPermissionMismatch|AccessDenied|Forbidden|Unauthorized|\bdenied\b"
-            r"|authentication required|insufficient (?:privileges|permissions)"
-            r"|does not have authorization|AADSTS\d+|please run.{0,30}az login|not logged in",
-            result.stderr, re.IGNORECASE,
-        ):
-            context: dict[str, str] = {}
-            for flag, field in (("--subscription", "SubscriptionId"), ("--registry", "Registry")):
-                if flag in arguments:
-                    context[field] = arguments[arguments.index(flag) + 1]
-            if arguments[:2] == ["acr", "login"] and "--name" in arguments:
-                context["Registry"] = arguments[arguments.index("--name") + 1]
-            raise AccessDeniedError(
-                "AZURE_CLI_ACCESS_DENIED: " + " ".join(arguments[:3])
-                + "; check az login/tenant and Reader plus AcrPull or "
-                "ABAC Repository Reader + Catalog Lister at the intended scope",
-                context,
-            )
         raise ScanError(
             "AZURE_CLI_FAILED: check az login, selected subscription, "
             "registry catalog/read permissions and network access"
@@ -289,33 +291,17 @@ class Registry(Protocol):
              destination: BinaryIO, limit: int) -> None: ...
 
 
-class IdentityToken(Protocol):
-    @property
-    def token(self) -> str: ...
-    @property
-    def expires_on(self) -> int: ...
-
-
-class IdentityCredential(Protocol):
-    def get_token(self, *scopes: str) -> IdentityToken: ...
-    def close(self) -> None: ...
-
-
 CLOUDS = {
-    "AzureCloud": ("https://management.azure.com", "https://login.microsoftonline.com",
-                   "https://containerregistry.azure.net/.default"),
-    "AzureUSGovernment": ("https://management.usgovcloudapi.net", "https://login.microsoftonline.us",
-                          "https://containerregistry.azure.us/.default"),
-    "AzureChinaCloud": ("https://management.chinacloudapi.cn", "https://login.chinacloudapi.cn",
-                       "https://containerregistry.azure.cn/.default"),
+    "AzureCloud": ("https://management.azure.com", "https://containerregistry.azure.net/.default"),
+    "AzureUSGovernment": ("https://management.usgovcloudapi.net", "https://containerregistry.azure.us/.default"),
+    "AzureChinaCloud": ("https://management.chinacloudapi.cn", "https://containerregistry.azure.cn/.default"),
 }
 
 
-class AzureIdentityAuth:
-    def __init__(self, credential: IdentityCredential, cloud: str = "AzureCloud",
+class AzureCliAuth:
+    def __init__(self, cloud: str = "AzureCloud",
                  timeout: int = 60) -> None:
-        self.credential = credential
-        self.arm, _, self.acr_scope = CLOUDS[cloud]
+        self.arm, self.acr_scope = CLOUDS[cloud]
         self.timeout = timeout
         self.guard = threading.RLock()
         self.tokens: dict[str, tuple[str, int]] = {}
@@ -323,26 +309,21 @@ class AzureIdentityAuth:
         self.stop: threading.Event | None = None
 
     def token(self, scope: str) -> str:
-        from azure.core.exceptions import AzureError, ClientAuthenticationError
-
         with self.guard:
             if self.stop and self.stop.is_set():
                 raise ScanError("CANCELLED")
             cached = self.tokens.get(scope)
             if cached and cached[1] > time.time() + 60:
                 return cached[0]
-            try:
-                token = self.credential.get_token(scope)
-            except ClientAuthenticationError as exc:
-                raise AccessDeniedError(
-                    f"AZURE_IDENTITY_ACCESS_DENIED: {type(exc).__name__}; "
-                    "configure the intended credential/tenant or Managed Identity client ID; "
-                    "no alternative authentication mode will be selected",
-                ) from None
-            except AzureError as exc:
-                raise ScanError(f"AZURE_IDENTITY_FAILED: {type(exc).__name__}; check credential chain and RBAC") from None
-            self.tokens[scope] = token.token, token.expires_on
-            return token.token
+            result = object_value(run_az(["account", "get-access-token", "--scope", scope]), "CLI access token")
+            token = string_value(result.get("accessToken"), "accessToken")
+            expires = result.get("expires_on")
+            if isinstance(expires, str) and expires.isdigit():
+                expires = int(expires)
+            if type(expires) is not int or expires <= time.time():
+                raise ScanError("INVALID_CLI_TOKEN_EXPIRATION: update Azure CLI and run az login")
+            self.tokens[scope] = token, expires
+            return token
 
     def arm_json(self, url: str) -> dict[str, object]:
         parsed = urllib.parse.urlsplit(url)
@@ -397,7 +378,8 @@ class AzureIdentityAuth:
             return self.arm_json(f"{self.arm}{resource_id}?api-version=2023-07-01")
         subscription = subscription or os.environ.get("AZURE_SUBSCRIPTION_ID")
         if not subscription:
-            raise ScanError("SUBSCRIPTION_REQUIRED: use --subscription or AZURE_SUBSCRIPTION_ID with --registry")
+            account = object_value(run_az(["account", "show"]), "active Azure CLI account")
+            subscription = string_value(account.get("id"), "active subscription id")
         prefix = f"{self.arm}/subscriptions/{urllib.parse.quote(subscription, safe='')}"
         for entry in arm_pages(prefix + "/providers/Microsoft.ContainerRegistry/registries?api-version=2023-07-01",
                                auth=self):
@@ -405,31 +387,14 @@ class AzureIdentityAuth:
                 return entry
         raise ScanError("REGISTRY_NOT_FOUND_IN_SUBSCRIPTION")
 
-    def close(self) -> None:
-        self.credential.close()
-
-
-def create_auth(args: argparse.Namespace) -> AzureIdentityAuth | None:
-    if args.auth == "azure-cli":
-        return None
-    try:
-        from azure.identity import DefaultAzureCredential
-    except ImportError:
-        raise ScanError("AZURE_IDENTITY_MISSING: install requirements.txt or explicitly use --auth azure-cli") from None
-    try:
-        credential = DefaultAzureCredential(
-            managed_identity_client_id=args.managed_identity_client_id or os.environ.get("AZURE_CLIENT_ID"),
-            authority=CLOUDS[args.cloud][1], exclude_interactive_browser_credential=True,
-            exclude_broker_credential=True,
-        )
-    except ValueError as exc:
-        raise ScanError(f"AZURE_IDENTITY_CONFIGURATION_INVALID: {type(exc).__name__}") from None
-    return AzureIdentityAuth(credential, args.cloud, args.timeout)
+def create_auth(args: argparse.Namespace) -> AzureCliAuth:
+    return AzureCliAuth(args.cloud, args.timeout)
 
 
 class AzureRegistry:
     def __init__(self, name: str, timeout: int = 60, subscription: str | None = None,
-                 auth: AzureIdentityAuth | None = None, resource_id: str | None = None) -> None:
+                 auth: AzureCliAuth | None = None, resource_id: str | None = None,
+                 stop: threading.Event | None = None) -> None:
         self.name = name
         self.subscription = subscription
         self.auth = auth
@@ -437,7 +402,7 @@ class AzureRegistry:
         self.timeout = timeout
         self._http = threading.local()
         self._auth_lock = threading.RLock()
-        self.stop: threading.Event | None = None
+        self.stop = stop
         self.server = ""
         self.refresh_token = ""
         self.tokens: dict[tuple[str, str], tuple[str, float]] = {}
@@ -1224,24 +1189,28 @@ class Parallelism:
                 return found
 
             def load() -> Layer:
-                if self.stop.is_set():
-                    raise ScanError("CANCELLED")
-                with tempfile.TemporaryDirectory(prefix="acr-layer-") as directory:
-                    path = str(Path(directory) / "layer")
-                    with open(path, "wb") as file:
-                        registry.blob(repository, descriptor, file, limits.layer)
-                    with self.parse_slots:
-                        if self.parsers and size >= 8 * 1024 * 1024:
-                            try:
-                                return self.parsers.submit(
-                                    parse_layer_file, path, digest, limits.file, limits.unpacked,
-                                ).result()
-                            except (BrokenProcessPool, OSError) as exc:
-                                raise ScanError(
-                                    f"CPU_PARSER_FAILED: {type(exc).__name__}; try --thread-parsers",
-                                ) from exc
-                        with open(path, "rb") as file:
-                            return scan_layer(file, digest, limits.file, limits.unpacked, self.stop)
+                try:
+                    self.check()
+                    with tempfile.TemporaryDirectory(prefix="acr-layer-") as directory:
+                        path = str(Path(directory) / "layer")
+                        with open(path, "wb") as file:
+                            registry.blob(repository, descriptor, file, limits.layer)
+                        with self.parse_slots:
+                            if self.parsers and size >= 8 * 1024 * 1024:
+                                try:
+                                    return self.parsers.submit(
+                                        parse_layer_file, path, digest, limits.file, limits.unpacked,
+                                    ).result()
+                                except (BrokenProcessPool, OSError) as exc:
+                                    raise ScanError(
+                                        f"CPU_PARSER_FAILED: {type(exc).__name__}; try --thread-parsers",
+                                    ) from exc
+                            with open(path, "rb") as file:
+                                return scan_layer(file, digest, limits.file, limits.unpacked, self.stop)
+                except AccessDeniedError as exc:
+                    error = exc.at(Repository=repository, LayerDigest=digest)
+                    self.deny(error)
+                    raise error
 
             try:
                 future = self.layers.submit(load)
@@ -1529,7 +1498,7 @@ class ScopeInventory:
 
 def arm_pages(url: str, subscription: str | None = None,
               stop: threading.Event | None = None,
-              auth: AzureIdentityAuth | None = None) -> Iterator[dict[str, object]]:
+              auth: AzureCliAuth | None = None) -> Iterator[dict[str, object]]:
     origin = urllib.parse.urlsplit(url)
     seen: set[str] = set()
     while url:
@@ -1553,7 +1522,7 @@ def arm_pages(url: str, subscription: str | None = None,
 
 
 def discover_scope(group: str, arm: str, parallel: Parallelism | None = None,
-                   auth: AzureIdentityAuth | None = None) -> ScopeInventory:
+                   auth: AzureCliAuth | None = None) -> ScopeInventory:
     result = ScopeInventory()
     url = (f"{arm}/providers/Microsoft.Management/managementGroups/"
            f"{urllib.parse.quote(group, safe='')}/descendants?api-version=2020-05-01")
@@ -1621,7 +1590,7 @@ def discover_scope(group: str, arm: str, parallel: Parallelism | None = None,
 
 
 def scan_management_group(group: str, report: Report, limits: Limits, timeout: int,
-                          parallel: Parallelism | None = None, auth: AzureIdentityAuth | None = None) -> int:
+                          parallel: Parallelism | None = None, auth: AzureCliAuth | None = None) -> int:
     if auth:
         arm = auth.arm
     else:
@@ -1659,8 +1628,10 @@ def scan_management_group(group: str, report: Report, limits: Limits, timeout: i
             if parallel:
                 parallel.check()
             registry = (AzureRegistry(entry.name, timeout, subscription=entry.subscription,
-                                      auth=auth, resource_id=entry.resource_id)
-                        if auth else AzureRegistry(entry.name, timeout, subscription=entry.subscription))
+                                      auth=auth, resource_id=entry.resource_id,
+                                      stop=parallel.stop if parallel else None)
+                        if auth else AzureRegistry(entry.name, timeout, subscription=entry.subscription,
+                                                   stop=parallel.stop if parallel else None))
             if parallel:
                 registry.stop = parallel.stop
             return scan(registry, child, limits, parallel)
@@ -1708,11 +1679,10 @@ def main(argv: list[str] | None = None) -> int:
     scope.add_argument("--registry", help="Azure registry resource name, not a URL")
     scope.add_argument("--management-group", type=management_group_id,
                        help="Management group ID or ARM ID; scans all descendant subscriptions")
-    parser.add_argument("--subscription", help="Subscription ID for --registry (legacy CLI also accepts a name)")
+    parser.add_argument("--subscription", help="Subscription ID for --registry; defaults to the current CLI subscription")
     parser.add_argument("--resource-group", help="Registry resource group; permits direct ARM lookup with ACR-scoped Reader")
-    parser.add_argument("--auth", choices=("default", "azure-cli"), default="default",
-                        help="DefaultAzureCredential (default) or explicit legacy Azure CLI mode")
-    parser.add_argument("--managed-identity-client-id", help="User-assigned managed identity client ID")
+    parser.add_argument("--auth", choices=("azure-cli",), default="azure-cli",
+                        help="Azure CLI az login authentication (default; option kept for compatibility)")
     parser.add_argument("--cloud", choices=tuple(CLOUDS), default="AzureCloud")
     parser.add_argument("--output", type=Path, help="New CSV path; existing files are never overwritten")
     parser.add_argument("--max-layer-mib", type=int, default=1024)
@@ -1734,8 +1704,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--subscription is only valid with --registry")
     if args.management_group and args.resource_group:
         parser.error("--resource-group is only valid with --registry")
-    if args.auth == "azure-cli" and (args.managed_identity_client_id or args.resource_group):
-        parser.error("--managed-identity-client-id and --resource-group require --auth default")
     if min(args.max_layer_mib, args.max_file_mib, args.max_unpacked_layer_mib, args.timeout) <= 0:
         parser.error("size limits and timeout must be positive")
     if not all(1 <= value <= 64 for value in (
@@ -1760,7 +1728,7 @@ def main(argv: list[str] | None = None) -> int:
                                      "SubscriptionId": args.subscription or ""})
             try:
                 started = time.perf_counter()
-                with ExitStack() as credentials, Parallelism(
+                with Parallelism(
                     1 if args.serial else args.workers,
                     1 if args.serial else args.registry_workers,
                     1 if args.serial else args.metadata_workers,
@@ -1770,7 +1738,6 @@ def main(argv: list[str] | None = None) -> int:
                     auth = create_auth(args)
                     if auth:
                         auth.stop = parallel.stop
-                        credentials.callback(auth.close)
                     if args.management_group:
                         exit_code = scan_management_group(args.management_group, report, limits,
                                                           args.timeout, parallel, auth)
@@ -1780,15 +1747,18 @@ def main(argv: list[str] | None = None) -> int:
                             resource_id = None
                             if args.resource_group:
                                 if not subscription:
-                                    raise ScanError("SUBSCRIPTION_REQUIRED_WITH_RESOURCE_GROUP")
+                                    account = object_value(run_az(["account", "show"]), "active CLI account")
+                                    subscription = string_value(account.get("id"), "active subscription id")
                                 resource_id = (f"/subscriptions/{urllib.parse.quote(subscription, safe='')}"
                                                f"/resourceGroups/{urllib.parse.quote(args.resource_group, safe='')}"
                                                f"/providers/Microsoft.ContainerRegistry/registries/{args.registry}")
                             registry = AzureRegistry(args.registry, args.timeout, subscription=subscription,
-                                                     auth=auth, resource_id=resource_id)
+                                                     auth=auth, resource_id=resource_id, stop=parallel.stop)
                         else:
-                            registry = (AzureRegistry(args.registry, args.timeout, subscription=args.subscription)
-                                        if args.subscription else AzureRegistry(args.registry, args.timeout))
+                            registry = (AzureRegistry(args.registry, args.timeout, subscription=args.subscription,
+                                                      stop=parallel.stop)
+                                        if args.subscription else AzureRegistry(args.registry, args.timeout,
+                                                                               stop=parallel.stop))
                         registry.stop = parallel.stop
                         exit_code = scan(registry, report, limits, parallel)
                 print(f"Elapsed: {time.perf_counter() - started:.2f}s", file=sys.stderr)
