@@ -200,14 +200,6 @@ def load_config(path: Path, local_only: bool = False) -> dict[str, Any]:
     return config
 
 
-def lab_scope(value: str) -> str:
-    require(isinstance(value, str) and bool(re.fullmatch(
-        r"/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/rg-ra-verifier-[a-zA-Z0-9_-]+",
-        value, re.I)), "Lab scope must be the full ARM ID of an rg-ra-verifier-* resource group.")
-    guid(value.split("/")[2])
-    return value.lower()
-
-
 def management_group_id(value: str) -> str:
     require(isinstance(value, str), "Management group ID must be a string.")
     value = value.strip().rstrip("/").lower()
@@ -365,10 +357,6 @@ class Azure:
                 and not parsed.fragment, "Untrusted ARM URL.")
         require(method == "GET" or (method == "POST" and url == ARG_URL),
                 "Only ARM GET and read-only ARG POST are permitted.")
-        scope = self.config.get("_lab_resource_group_id")
-        if scope and method == "GET":
-            path = parsed.path.lower().rstrip("/")
-            require(path == scope or path.startswith(scope + "/"), "ARM GET escaped the lab RG.")
         for attempt in range(5):
             try:
                 status, payload = self.wire.send(method, url, {
@@ -396,11 +384,8 @@ class Azure:
         tokens: set[str] = set()
         token = None
         total = None
-        scope = self.config.get("_lab_resource_group_id")
         selected_group = self.config.get("_management_group_id")
-        require(bool(scope or selected_group), "Select --management-group or --lab-resource-group.")
-        if scope:
-            query += f" | where id startswith '{scope}/'"
+        require(bool(selected_group), "Select --management-group.")
         for _ in range(100000):
             options: dict[str, Any] = {
                 "$top": 1000, "resultFormat": "objectArray", "allowPartialScopes": False,
@@ -408,10 +393,8 @@ class Azure:
             }
             if token:
                 options["$skipToken"] = token
-            selection = ({"subscriptions": [scope.split("/")[2]]} if scope
-                         else {"managementGroups": [selected_group]})
             result = self.request("POST", ARG_URL, {
-                **selection, "query": query, "options": options,
+                "managementGroups": [selected_group], "query": query, "options": options,
             })
             assert result is not None
             page = result.get("data")
@@ -427,9 +410,7 @@ class Azure:
                 require(isinstance(row, dict) and isinstance(row.get("id"), str),
                         "ARG returned a row without an ID.")
                 key = row["id"].lower().rstrip("/")
-                require(not scope or key.startswith(scope + "/"),
-                        "ARG returned a record outside the lab RG.")
-                if selected_group and query == ROLE_QUERY:
+                if query == ROLE_QUERY:
                     require(bool(self.management_scope_ids),
                             "Management group hierarchy must be checked before assignment capture.")
                     assignment_scope = row.get("properties", {}).get("scope", "").lower().rstrip("/")
@@ -507,18 +488,10 @@ class Azure:
         return sorted(scopes, key=lambda item: item["id"]), read_scopes
 
     def check_scopes(self) -> list[dict[str, Any]]:
-        scope = self.config.get("_lab_resource_group_id")
         selected_group = self.config.get("_management_group_id")
-        require(bool(scope or selected_group), "Select --management-group or --lab-resource-group.")
-        root = scope or MG_PREFIX + selected_group
-        inventory, read_scopes = (self.management_inventory() if selected_group else (None, {root}))
-        group = None
-        if scope:
-            group = self.request("GET", ARM + scope + "?api-version=2022-09-01")
-            assert group is not None
-            require(group.get("id", "").lower() == scope
-                    and group.get("tags", {}).get("purpose") == "role-assignment-verifier-live-test",
-                    "Lab RG ID/tag mismatch; existing non-test RGs cannot be used.")
+        require(bool(selected_group), "Select --management-group.")
+        root = MG_PREFIX + selected_group
+        inventory, read_scopes = self.management_inventory()
         url = ARM + root + (
             "/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01"
             "&$filter=atScope()")
@@ -539,13 +512,8 @@ class Azure:
             and not row["properties"].get("condition")
             for row in root_assignments
         ), "Coverage guard requires an unconditional direct Reader/Contributor/Owner assignment "
-           "to this user at the selected management group/ancestor or lab RG. "
+           "to this user at the selected management group/ancestor. "
            "Group-only/custom-role coverage is not auto-verified.")
-        if group is not None:
-            return [{"id": scope, "name": group["name"],
-                     "type": "microsoft.resources/subscriptions/resourcegroups",
-                     "subscriptionId": scope.split("/")[2], "tenantId": self.config["tenant_id"]}]
-        assert inventory is not None
         scopes = self.graph(SCOPE_QUERY)
         identifiers = {item["id"] for item in inventory}
         visible = {item["id"].lower() for item in scopes}
@@ -562,8 +530,6 @@ class Azure:
         if prechecked_scopes is not None:
             require(prechecked_scopes == scopes, "Scopes changed since baseline preflight.")
         roles = self.graph(ROLE_QUERY)
-        require(bool(roles) or bool(self.config.get("_management_group_id")),
-                "Empty organization role assignment snapshot rejected.")
         role_index(roles)
         current_scopes = self.check_scopes()
         require(current_scopes == scopes, "Scopes changed during capture.")
@@ -829,9 +795,7 @@ def contract(config: dict[str, Any]) -> dict[str, Any]:
         "tenant_id", "excel_path", "sheet_name", "active_only",
         "workspace_id", "log_type",
     )}
-    if config.get("_lab_resource_group_id"):
-        value.update(lab_resource_group_id=config["_lab_resource_group_id"],
-                     local_only=config["_local_only"])
+    value["local_only"] = config.get("_local_only", False)
     if config.get("_management_group_id"):
         value.update(management_group_id=config["_management_group_id"],
                      authorization_scope_filter="AtScopeAndBelow")
@@ -839,30 +803,19 @@ def contract(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def execute(config: dict[str, Any], run_date: date | None = None, upload_only: bool = False,
-            lab_resource_group_id: str | None = None, local_only: bool = False,
+            *, local_only: bool = False,
             before_file: Path | None = None, management_group: str | None = None) -> int:
-    require(not local_only or bool(lab_resource_group_id),
-            "--local-only is allowed only with --lab-resource-group.")
     require(not local_only or not upload_only, "--upload-only cannot be combined with --local-only.")
     require(not upload_only or before_file is not None, "--upload-only requires --before <A-file>.")
-    require(management_group is None or lab_resource_group_id is None,
-            "--management-group cannot be combined with --lab-resource-group.")
-    require(management_group is not None or lab_resource_group_id is not None,
-            "Production execution requires --management-group; lab execution requires --lab-resource-group.")
+    require(management_group is not None, "Execution requires --management-group.")
     config = dict(config)
-    if management_group is not None:
-        config["_management_group_id"] = management_group_id(management_group)
-        print(f"Management group: {MG_PREFIX}{config['_management_group_id']} (this scope and below).",
-              flush=True)
-    event_context = ({"ManagementGroupScope": MG_PREFIX + config["_management_group_id"]}
-                     if management_group is not None else {})
-    if lab_resource_group_id is not None:
-        scope = lab_scope(lab_resource_group_id)
-        config.update(_lab_resource_group_id=scope, _local_only=local_only)
-        print(f"LAB MODE: {scope}; immediate RG-only capture, NOT tenant-wide verification.",
-              file=sys.stderr, flush=True)
+    config["_local_only"] = local_only
+    config["_management_group_id"] = management_group_id(management_group)
+    print(f"Management group: {MG_PREFIX}{config['_management_group_id']} (this scope and below).",
+          flush=True)
+    event_context = {"ManagementGroupScope": MG_PREFIX + config["_management_group_id"]}
     require(bool(config.get("workspace_id")) or local_only,
-            "Workspace ID is required unless explicit lab local-only mode is used.")
+            "Workspace ID is required unless --local-only is used.")
     if before_file is not None:
         before_file = before_file.resolve()
         require(before_file.is_file() and before_file.parent.name == "before",
@@ -891,6 +844,7 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
         if baseline:
             previous_contract = dict(baseline["contract"])
             previous_contract.pop("expected_subscription_ids", None)
+            previous_contract.setdefault("local_only", False)
             require(previous_contract == contract(config), "Baseline config contract changed.")
         require(not after_path.exists() or baseline is not None, "After evidence has no baseline.")
         completed = verify_phase(after_path) if after_path.exists() else None
@@ -913,12 +867,12 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
         if baseline:
             require(digest(excel) == baseline["excel_sha256"], "Excel changed since baseline capture.")
             boundary = datetime.combine(run_date, wall_time(18), KST)
-            require(lab_resource_group_id is not None or now() >= boundary,
+            require(now() >= boundary,
                     "Before phase complete. Run again after deletion finishes.")
         else:
             require(run_date == now().astimezone(KST).date(), "Baseline must be captured today (KST).")
             boundary = datetime.combine(run_date, wall_time(18), KST)
-            require(lab_resource_group_id is not None or now() < boundary,
+            require(now() < boundary,
                     "Too late to create a pre-deletion baseline.")
         auth = CliAuth(config["tenant_id"])
         azure = Azure(config, auth, wire)
@@ -976,13 +930,11 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
                        "added": len(set(after) - set(before)),
                        "modified": sum(role_identity(before[item]) != role_identity(after[item])
                                        for item in set(before) & set(after))}
-            if lab_resource_group_id:
-                summary.update(mode="LAB_RESOURCE_GROUP", scope=config["_lab_resource_group_id"],
-                               log_analytics="NOT_SENT_LOCAL_ONLY" if local_only else "API_PENDING")
-            elif management_group is not None:
-                summary.update(mode="MANAGEMENT_GROUP",
-                               management_group_id=config["_management_group_id"],
-                               scope=MG_PREFIX + config["_management_group_id"])
+            summary.update(mode="MANAGEMENT_GROUP",
+                           management_group_id=config["_management_group_id"],
+                           scope=MG_PREFIX + config["_management_group_id"])
+            if local_only:
+                summary["log_analytics"] = "NOT_SENT_LOCAL_ONLY"
             events.append(event(run_id, "After", "Summary", **event_context, ObservedAt=finished,
                                 Status=summary["status"], BeforeCount=len(before_rows),
                                 AfterCount=len(rows), DeletedCount=len(deleted),
@@ -1004,13 +956,13 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
             prechecked_scopes = azure.check_scopes()
             preflight_checked_at = stamp()
             start = datetime.combine(run_date, wall_time(17, 59), KST)
-            while not lab_resource_group_id and now() < start:
+            while now() < start:
                 print(f"Waiting for {start.isoformat()} (keep this PC awake).", flush=True)
                 time.sleep(max(0, min(60, (start - now()).total_seconds())))
-            require(lab_resource_group_id is not None or now() < boundary,
+            require(now() < boundary,
                     "Baseline capture missed the pre-deletion window.")
             rows, scopes, started, finished = azure.capture(prechecked_scopes)
-            require(lab_resource_group_id is not None or now() < boundary,
+            require(now() < boundary,
                     "Baseline did not finish before 18:00; A was not committed.")
             index = role_index(rows)
             selected_ids = [key for row, key in resolved_targets(targets, index) if row["selected"]]
@@ -1020,7 +972,7 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
                       "their deletion cannot be proven.", file=sys.stderr, flush=True)
             require(len([item for item in selected_ids if item]) == len(set(
                 item for item in selected_ids if item)), "Excel GUID/full-ID aliases duplicate a target.")
-            run_id = ("lab-run-" if lab_resource_group_id else "run-") + str(uuid4())
+            run_id = "run-" + str(uuid4())
             path = commit_phase(directory, "before", {
                 "A.jsonl": rows, "X.jsonl": targets, "scopes.jsonl": scopes,
                 "events.jsonl": [event(run_id, "Before", "Summary", **event_context, ObservedAt=finished,
@@ -1031,7 +983,7 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
                 "principal_id": auth.principal_id, "contract": contract(config),
                 "excel_sha256": excel_hash, "started_at": started, "finished_at": finished,
                 "preflight_checked_at": preflight_checked_at,
-                "baseline_deadline": None if lab_resource_group_id else boundary.isoformat()})
+                "baseline_deadline": boundary.isoformat()})
             code = 0
             print(f"A committed: {phase_file(path, 'A.jsonl')}", flush=True)
             print("After deletion finishes, run again with --before pointing to this A file.", flush=True)
@@ -1039,34 +991,30 @@ def execute(config: dict[str, Any], run_date: date | None = None, upload_only: b
             deliver(path, config, key, wire)
             print("Log Analytics HTTP 200: accepted, not yet query-verified.", flush=True)
         else:
-            print("LAB LOCAL ONLY: events saved; Log Analytics NOT sent or verified.", flush=True)
+            print("LOCAL ONLY: evidence saved; Log Analytics NOT sent or verified.", flush=True)
         return code
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only daily Azure RBAC deletion verifier.")
     parser.add_argument("--config", type=Path, required=True)
-    scope_options = parser.add_mutually_exclusive_group(required=True)
-    scope_options.add_argument("--management-group",
-                               help="Required for production: management group ID or ARM ID; descendants are discovered.")
+    parser.add_argument("--management-group", required=True,
+                        help="Management group ID or ARM ID; descendants are discovered.")
     parser.add_argument("--before", type=Path,
                         help="Committed A JSONL path; required for comparison and upload retry.")
     parser.add_argument("--run-date", type=date.fromisoformat,
                         help="Optional KST date; must match --before if supplied.")
     parser.add_argument("--upload-only", action="store_true", help="Retry saved logs without recapture.")
-    scope_options.add_argument("--lab-resource-group",
-                               help="Lab alternative: tagged rg-ra-verifier-* ARM ID; RG-only immediate capture.")
     parser.add_argument("--local-only", action="store_true",
-                        help="Lab only: save events locally without Workspace Key or log ingestion.")
+                        help="Save local evidence only; no Workspace ID/Key or Log Analytics ingestion required.")
     args = parser.parse_args(argv)
-    print("WARNING: legacy Data Collector API support ended 2026-09-14; ingestion continues.",
-          file=sys.stderr, flush=True)
+    if not args.local_only:
+        print("WARNING: legacy Data Collector API support ended 2026-09-14; ingestion continues.",
+              file=sys.stderr, flush=True)
     try:
-        require(not args.local_only or bool(args.lab_resource_group),
-                "--local-only requires --lab-resource-group.")
         config = load_config(args.config.resolve(), local_only=args.local_only)
-        return execute(config, args.run_date, args.upload_only, args.lab_resource_group,
-                       args.local_only, args.before, args.management_group)
+        return execute(config, args.run_date, args.upload_only, local_only=args.local_only,
+                       before_file=args.before, management_group=args.management_group)
     except (VerificationError, OSError, ValueError, KeyError, ImportError) as exc:
         if isinstance(exc, VerificationError):
             message = str(exc)
