@@ -1,77 +1,47 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
-import contextlib
 import csv
-import getpass
 import hashlib
-import hmac
+import io
 import json
 import os
 import re
 import shutil
-import ssl
 import subprocess
 import sys
 import tempfile
-import time
-from collections import Counter
-from datetime import date, datetime, time as wall_time, timedelta, timezone
-from email.utils import format_datetime, parsedate_to_datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener, HTTPSHandler
-from uuid import UUID, uuid4
-from zipfile import BadZipFile
+from typing import Any
+from uuid import UUID
 
 ARM = "https://management.azure.com"
-ARG_URL = ARM + "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-MG_PREFIX = "/providers/microsoft.management/managementgroups/"
-KST = timezone(timedelta(hours=9), "KST")
-READ_ROLES = {
-    "acdd72a7-3385-48ef-bd42-f606fba81ae7",  # Reader
-    "b24988ac-6180-42a0-ab88-20f7382dd24c",  # Contributor
-    "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",  # Owner
-}
-RESULT_LABELS = {
-    "EXPECTED_DELETED": "정상 삭제",
-    "EXPECTED_REMAINING": "미삭제",
-    "NOT_IN_BASELINE": "검증 불가 (A자료에 없음)",
-    "UNEXPECTED_DELETED": "오삭제",
-}
-ROLE_QUERY = (
-    "AuthorizationResources | where type =~ 'microsoft.authorization/roleassignments' "
-    "| project id, name, type, tenantId, subscriptionId, properties | order by id asc"
+MG_PREFIX = "/providers/Microsoft.Management/managementGroups/"
+RA_MARKER = "/providers/microsoft.authorization/roleassignments/"
+FIELDS = (
+    "RoleAssignmentId", "ManagementGroupName", "SubscriptionName",
+    "ResourceGroupName", "ResourceName", "RoleName", "Scope",
+    "ScopeType", "ManagementGroupId", "SubscriptionId", "RoleDefinitionId",
+    "PrincipalId",
 )
-SCOPE_QUERY = (
-    "ResourceContainers | where type in~ "
-    "('microsoft.resources/subscriptions', 'microsoft.management/managementgroups') "
-    "| project id, name, type, tenantId, subscriptionId | order by id asc"
-)
-ROLE_ID = re.compile(
-    r"^(?:/subscriptions/[0-9a-f-]{36}(?:/[^?#]*)?"
-    r"|/providers/microsoft\.management/managementgroups/[^/?#]+|)"
-    r"/providers/microsoft\.authorization/roleassignments/"
-    r"([0-9a-f-]{36})$", re.I,
-)
+ASSIGNMENTS_QUERY = """AuthorizationResources
+| where type =~ 'microsoft.authorization/roleassignments'
+| project id, scope=tostring(properties.scope),
+    roleDefinitionId=tostring(properties.roleDefinitionId),
+    principalId=tostring(properties.principalId)
+| order by id asc"""
+ROLES_QUERY = """AuthorizationResources
+| where type =~ 'microsoft.authorization/roledefinitions'
+| project id, roleName=tostring(properties.roleName)
+| order by id asc"""
+SUBSCRIPTIONS_QUERY = """ResourceContainers
+| where type =~ 'microsoft.resources/subscriptions'
+| project id
+| order by id asc"""
 
 
 class VerificationError(Exception):
-    pass
-
-
-class HttpFailure(VerificationError):
-    def __init__(self, status: int, retry_after: float = 0):
-        super().__init__(f"HTTP {status}; no successful snapshot or delivery was recorded.")
-        self.status = status
-        self.retry_after = retry_after
-
-
-class NotConverged(VerificationError):
     pass
 
 
@@ -80,952 +50,396 @@ def require(condition: bool, message: str) -> None:
         raise VerificationError(message)
 
 
-def now() -> datetime:
-    return datetime.now(timezone.utc)
+def text(value: Any, label: str) -> str:
+    require(isinstance(value, str) and bool(value.strip()), f"Missing/invalid {label}.")
+    return value.strip()
 
 
-def stamp(value: datetime | None = None) -> str:
-    return (value or now()).astimezone(timezone.utc).isoformat(timespec="seconds")
+def canonical(value: str) -> str:
+    return value.strip().rstrip("/").lower()
 
 
-def canonical(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-                      allow_nan=False).encode("utf-8")
+def guid(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError:
+        raise VerificationError(f"Invalid GUID: {value}") from None
 
 
-def digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+def role_guid(value: str) -> str:
+    require(bool(re.fullmatch(
+        r"/(?:[^/?#]+/)*providers/microsoft\.authorization/roledefinitions/"
+        r"[0-9a-f-]{36}", canonical(value)
+    )), f"Invalid role definition ID: {value}")
+    return guid(canonical(value).rsplit("/", 1)[-1])
 
 
-def guid(value: Any) -> str:
-    require(isinstance(value, str) and bool(re.fullmatch(
-        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value)),
-        "Expected a hyphenated GUID.")
-    return str(UUID(value))
-
-
-def assignment_key(value: Any) -> str:
-    require(isinstance(value, str), "roleAssignment must be a GUID or full ARM ID.")
-    value = value.strip().rstrip("/").lower()
-    if value.startswith("/"):
-        match = ROLE_ID.fullmatch(value)
-        require(match is not None, "Invalid role assignment ARM ID.")
-        assert match is not None
-        guid(match.group(1))
-        require("/../" not in value and "/./" not in value and "%" not in value,
-                "Unsafe role assignment ARM ID.")
-        if value.startswith("/subscriptions/"):
-            guid(value.split("/")[2])
-        return value
-    return guid(value)
-
-
-def read_json(path: Path) -> Any:
-    with path.open(encoding="utf-8-sig") as stream:
-        return json.load(stream)
-
-
-def write_json(path: Path, value: Any) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("wb") as stream:
-        stream.write(canonical(value) + b"\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("wb") as stream:
-        for row in rows:
-            stream.write(canonical(row) + b"\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-
-
-def write_verification_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(["Role Assignment ID", "삭제", "오삭제", "미삭제", "판정",
-                         "Role Assignment Resource ID", "Excel Rows"])
-        for row in rows:
-            flags = ["검증 불가" if row[field] is None else "예" if row[field] else "아니오"
-                     for field in ("deleted", "unexpectedDeleted", "notDeleted")]
-            writer.writerow([row["roleAssignmentId"], *flags, row["result"], row["assignmentId"],
-                             ",".join(map(str, row["excelRows"]))])
-        stream.flush()
-        os.fsync(stream.fileno())
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as stream:
-        rows = [json.loads(line) for line in stream if line.strip()]
-    require(all(isinstance(row, dict) for row in rows), "Invalid JSONL object.")
-    return rows
-
-
-def load_config(path: Path, local_only: bool = False) -> dict[str, Any]:
-    config = read_json(path)
-    require(isinstance(config, dict), "Config must be a JSON object.")
-    require("expected_subscription_ids" not in config,
-            "Remove obsolete expected_subscription_ids; subscriptions are discovered from the management group.")
-    allowed = {"tenant_id", "excel_path", "sheet_name",
-               "active_only", "output_directory", "workspace_id", "workspace_key_env",
-               "log_type", "stability_seconds", "capture_attempts"}
-    require(not set(config) - allowed, "Unknown config fields; check config.example.json.")
-    config["tenant_id"] = guid(config.get("tenant_id"))
-    config["workspace_id"] = (None if local_only and not config.get("workspace_id")
-                              else guid(config.get("workspace_id")))
-    for field in ("excel_path", "output_directory"):
-        require(isinstance(config.get(field), str) and bool(config[field].strip()),
-                f"Missing {field}.")
-        config[field] = str((path.parent / config[field]).resolve())
-    require(isinstance(config.get("sheet_name"), str) and bool(config["sheet_name"]),
-            "Specify the Excel sheet_name explicitly.")
-    config.setdefault("active_only", True)
-    require(isinstance(config["active_only"], bool), "active_only must be boolean.")
-    config.setdefault("workspace_key_env", "LA_WORKSPACE_KEY")
-    require(isinstance(config["workspace_key_env"], str) and bool(re.fullmatch(
-        r"[A-Za-z_][A-Za-z0-9_]*", config["workspace_key_env"])), "Invalid key environment name.")
-    config.setdefault("log_type", "KTRoleDeletionVerification")
-    require(isinstance(config["log_type"], str) and bool(re.fullmatch(
-        r"[A-Za-z][A-Za-z0-9_]{0,99}", config["log_type"]))
-        and not config["log_type"].endswith("_CL"), "log_type must omit the _CL suffix.")
-    for field, default, minimum, maximum in (
-        ("stability_seconds", 30, 1, 600), ("capture_attempts", 5, 2, 30)
-    ):
-        config.setdefault(field, default)
-        require(type(config[field]) is int and minimum <= config[field] <= maximum,
-                f"Invalid {field}.")
-    return config
-
-
-def management_group_id(value: str) -> str:
-    require(isinstance(value, str), "Management group ID must be a string.")
-    value = value.strip().rstrip("/").lower()
-    if value.startswith(MG_PREFIX):
-        value = value[len(MG_PREFIX):]
-    require(bool(re.fullmatch(r"[a-z0-9][a-z0-9._()-]{0,89}", value)) and not value.endswith("."),
-            "Use a management group ID (not display name) or its full ARM ID.")
+def management_group(value: str) -> str:
+    if value.lower().startswith(MG_PREFIX.lower()):
+        value = value[len(MG_PREFIX):].rstrip("/")
+    require(bool(re.fullmatch(r"[A-Za-z0-9_.()-]{1,90}", value)),
+            "Use the management group ID (not display name) or its full ARM ID.")
     return value
 
 
-def load_targets(path: Path, sheet_name: str, active_only: bool) -> list[dict[str, Any]]:
-    from openpyxl import load_workbook
-    from openpyxl.utils.exceptions import InvalidFileException
-
-    try:
-        book = load_workbook(path, read_only=True, data_only=False)
-    except (BadZipFile, InvalidFileException):
-        raise VerificationError("X must be a readable XLSX/XLSM workbook.") from None
-    try:
-        require(sheet_name in book.sheetnames, "Configured worksheet does not exist.")
-        rows = book[sheet_name].iter_rows()
-        header_cells = next(rows, ())
-        headers = [str(cell.value).strip() if cell.value is not None else ""
-                   for cell in header_cells]
-        for name in ("roleAssignment", "Active"):
-            require(headers.count(name) == 1, f"Expected exactly one {name} column.")
-        assignment_index, active_index = headers.index("roleAssignment"), headers.index("Active")
-        targets: dict[str, dict[str, Any]] = {}
-        aliases: dict[str, str] = {}
-        for number, cells in enumerate(rows, 2):
-            if all(cell.value is None for cell in cells):
-                continue
-            require(cells[assignment_index].data_type != "f"
-                    and cells[active_index].data_type != "f",
-                    f"Excel row {number}: formulas are not allowed in matching columns.")
-            raw_active = cells[active_index].value
-            require(isinstance(raw_active, bool) or (
-                isinstance(raw_active, str) and raw_active.strip().upper() in ("TRUE", "FALSE")),
-                f"Excel row {number}: Active must be TRUE or FALSE.")
-            active = raw_active if isinstance(raw_active, bool) else raw_active.strip().upper() == "TRUE"
-            try:
-                key = assignment_key(cells[assignment_index].value)
-            except VerificationError as exc:
-                raise VerificationError(f"Excel row {number}: {exc}") from None
-            name = key.rsplit("/", 1)[-1]
-            require(name not in aliases or aliases[name] == key,
-                    f"Excel row {number}: do not mix GUID/full-ID aliases for the same target.")
-            aliases[name] = key
-            selected = active or not active_only
-            if key in targets:
-                require(targets[key]["selected"] == selected,
-                        f"Excel row {number}: conflicting Active flags.")
-                targets[key]["excelRows"].append(number)
-            else:
-                targets[key] = {"key": key, "selected": selected, "excelRows": [number]}
-        require(any(row["selected"] for row in targets.values()), "No selected deletion targets.")
-        return sorted(targets.values(), key=lambda row: row["key"])
-    finally:
-        book.close()
+def stamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
-                         headers: Any, newurl: str) -> None:
-        return None
-
-
-class Wire:
+class AzureCLI:
     def __init__(self) -> None:
-        tls = ssl.create_default_context()
-        tls.minimum_version = ssl.TLSVersion.TLSv1_2
-        self.opener = build_opener(NoRedirect(), HTTPSHandler(context=tls))
-
-    def send(self, method: str, url: str, headers: dict[str, str],
-             body: bytes | None = None) -> tuple[int, bytes]:
-        try:
-            with self.opener.open(Request(url, data=body, headers=headers, method=method),
-                                  timeout=60) as response:
-                payload = response.read(64 * 1024 * 1024 + 1)
-                require(len(payload) <= 64 * 1024 * 1024, "HTTP response too large.")
-                return response.status, payload
-        except HTTPError as exc:
-            retry = exc.headers.get("Retry-After", "0")
-            try:
-                delay = float(retry)
-            except ValueError:
-                try:
-                    delay = (parsedate_to_datetime(retry) - now()).total_seconds()
-                except (ValueError, TypeError, OverflowError):
-                    delay = 0
-            raise HttpFailure(exc.code, min(300, max(0, delay))) from None
-        except (URLError, TimeoutError, OSError):
-            raise HttpFailure(0) from None
-
-
-class CliAuth:
-    def __init__(self, tenant_id: str):
         self.executable = shutil.which("az")
-        require(self.executable is not None, "Install Azure CLI and run az login --tenant <tenant>.")
-        account = self.command(["account", "show"])
-        require(account.get("environmentName") == "AzureCloud",
-                "This tool supports Azure public cloud only.")
-        require(account.get("user", {}).get("type", "").lower() == "user",
-                "Use an interactive Entra user, not a service principal or managed identity.")
-        require(guid(account.get("tenantId")) == tenant_id, "Azure CLI tenant mismatch.")
-        self.tenant_id = tenant_id
-        self.access_token = ""
-        self.expires = 0.0
-        self.principal_id = ""
-        self.token()
-
-    def command(self, arguments: list[str]) -> dict[str, Any]:
+        require(self.executable is not None, "Azure CLI not found. Install it and run az login.")
         assert self.executable is not None
+        self.command = [self.executable]
+        if Path(self.executable).suffix.lower() in (".cmd", ".bat"):
+            interpreter = Path(self.executable).parent.parent / "python.exe"
+            require(interpreter.is_file(),
+                    "Cannot locate Azure CLI python.exe. Use the standard Azure CLI Windows installation.")
+            # Bypass cmd.exe so URL ampersands and other arguments remain literal.
+            self.command = [str(interpreter), "-IBm", "azure.cli"]
+
+    def run(self, *args: str) -> dict[str, Any]:
+        environment = dict(os.environ, PYTHONIOENCODING="utf-8", AZURE_CORE_NO_COLOR="true")
         try:
-            result = subprocess.run([self.executable, *arguments, "--output", "json",
-                                     "--only-show-errors"], capture_output=True, check=False,
-                                    text=True, encoding="utf-8", timeout=120)
-        except (OSError, subprocess.TimeoutExpired):
-            raise VerificationError("Azure CLI could not run; check installation/login.") from None
-        require(result.returncode == 0, "Azure CLI failed; run az login and check tenant/access.")
-        data = json.loads(result.stdout)
-        require(isinstance(data, dict), "Azure CLI returned a non-object.")
-        return data
+            result = subprocess.run(
+                [*self.command, *args, "--output", "json", "--only-show-errors"],
+                capture_output=True, encoding="utf-8", env=environment, timeout=180,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise VerificationError(f"Azure CLI failed: {type(exc).__name__}.") from exc
+        require(result.returncode == 0,
+                f"Azure CLI failed ({result.returncode}): {result.stderr.strip()[:2000]}")
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as exc:
+            raise VerificationError("Azure CLI did not return valid JSON.") from exc
+        require(isinstance(payload, dict), "Azure CLI returned a non-object response.")
+        return payload
 
-    def token(self, refresh: bool = False) -> str:
-        if refresh or time.time() >= self.expires - 120:
-            token = self.command(["account", "get-access-token", "--tenant", self.tenant_id,
-                                  "--resource", ARM + "/"])
-            access_token = token.get("accessToken")
-            require(isinstance(access_token, str), "Azure CLI returned no access token.")
-            try:
-                encoded = access_token.split(".")[1]
-                claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
-                principal_id = guid(claims.get("oid"))
-                require(guid(claims.get("tid")) == self.tenant_id, "Token tenant mismatch.")
-                require(claims.get("idtyp") != "app", "Application tokens are not supported.")
-                expires = float(claims["exp"])
-            except (IndexError, ValueError, KeyError, binascii.Error):
-                raise VerificationError("Azure CLI returned an invalid ARM JWT.") from None
-            require(not self.principal_id or principal_id == self.principal_id,
-                    "Azure CLI user changed during capture.")
-            self.principal_id, self.access_token, self.expires = principal_id, access_token, expires
-        return self.access_token
+    def identity(self) -> dict[str, str]:
+        account = self.run("account", "show")
+        require(account.get("environmentName") == "AzureCloud",
+                "Only Azure public cloud (AzureCloud) is supported.")
+        user = account.get("user", {})
+        require(user.get("type") == "user", "Run az login with an Entra user account.")
+        return {
+            "tenantId": guid(text(account.get("tenantId"), "tenantId")),
+            "accountFingerprint": hashlib.sha256(
+                text(user.get("name"), "user name").lower().encode("utf-8")
+            ).hexdigest(),
+        }
 
+    def rest(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        require(path.startswith("/") and not path.startswith("//"), "Invalid ARM path.")
+        args = ["rest", "--method", "get" if body is None else "post", "--url", ARM + path]
+        if body is None:
+            return self.run(*args)
+        # A body file avoids cmd.exe quoting and command-line length limits on Windows.
+        with tempfile.TemporaryDirectory(prefix="role-snapshot-") as directory:
+            file = Path(directory) / "query.json"
+            file.write_text(json.dumps(body), encoding="utf-8")
+            return self.run(*args, "--headers", "Content-Type=application/json", "--body", f"@{file}")
 
-class Azure:
-    def __init__(self, config: dict[str, Any], auth: CliAuth, wire: Wire):
-        self.config, self.auth, self.wire = config, auth, wire
-        self.management_scope_ids: set[str] = set()
+    def hierarchy(self, group: str, tenant: str) -> dict[str, dict[str, str]]:
+        payload = self.rest(
+            f"{MG_PREFIX}{group}?api-version=2020-05-01&$expand=children&$recurse=true"
+        )
+        require(canonical(text(payload.get("id"), "root MG ID")) == canonical(MG_PREFIX + group),
+                "Management group response does not match the requested ID.")
+        require(canonical(text(payload.get("properties", {}).get("tenantId"), "MG tenant")) == tenant,
+                "Management group tenant does not match az login.")
+        return parse_hierarchy(payload)
 
-    def request(self, method: str, url: str, body: Any = None,
-                allow_missing: bool = False) -> dict[str, Any] | None:
-        parsed = urlsplit(url)
-        require(parsed.scheme == "https" and parsed.netloc == "management.azure.com"
-                and not parsed.fragment, "Untrusted ARM URL.")
-        require(method == "GET" or (method == "POST" and url == ARG_URL),
-                "Only ARM GET and read-only ARG POST are permitted.")
-        for attempt in range(5):
-            try:
-                status, payload = self.wire.send(method, url, {
-                    "Authorization": "Bearer " + self.auth.token(),
-                    "Content-Type": "application/json",
-                }, None if body is None else canonical(body))
-                require(status == 200, "Unexpected ARM response status.")
-                result = json.loads(payload)
-                require(isinstance(result, dict) and "error" not in result, "Invalid ARM response.")
-                return result
-            except HttpFailure as exc:
-                if allow_missing and exc.status == 404:
-                    return None
-                if exc.status == 401 and attempt == 0:
-                    self.auth.token(refresh=True)
-                    continue
-                if attempt == 4 or (exc.status not in (0, 429) and exc.status < 500):
-                    raise
-                time.sleep(max(exc.retry_after, min(30, 2 ** attempt)))
-        raise VerificationError("ARM retry budget exhausted.")
-
-    def graph(self, query: str) -> list[dict[str, Any]]:
+    def query(self, group: str, query: str, scope_filter: str = "AtScopeAndBelow") -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
+        ids: set[str] = set()
         tokens: set[str] = set()
-        token = None
-        total = None
-        selected_group = self.config.get("_management_group_id")
-        require(bool(selected_group), "Select --management-group.")
-        for _ in range(100000):
+        token: str | None = None
+        expected: int | None = None
+        while True:
             options: dict[str, Any] = {
-                "$top": 1000, "resultFormat": "objectArray", "allowPartialScopes": False,
-                "authorizationScopeFilter": "AtScopeAndBelow",
+                "$top": 1000, "resultFormat": "objectArray",
+                "allowPartialScopes": False, "authorizationScopeFilter": scope_filter,
             }
             if token:
                 options["$skipToken"] = token
-            result = self.request("POST", ARG_URL, {
-                "managementGroups": [selected_group], "query": query, "options": options,
+            page = self.rest("/providers/Microsoft.ResourceGraph/resources?api-version=2024-04-01", {
+                "managementGroups": [group], "query": query, "options": options,
             })
-            assert result is not None
-            page = result.get("data")
-            require(isinstance(page, list), "ARG data is not an objectArray.")
-            require(type(result.get("count")) is int and result["count"] == len(page),
-                    "ARG count mismatch.")
-            page_total = result.get("totalRecords")
-            require(type(page_total) is int and page_total >= 0, "ARG totalRecords missing.")
-            if total is None:
-                total = page_total
-            require(total == page_total, "ARG changed while paging; retry the capture.")
-            for row in page:
-                require(isinstance(row, dict) and isinstance(row.get("id"), str),
-                        "ARG returned a row without an ID.")
-                key = row["id"].lower().rstrip("/")
-                if query == ROLE_QUERY:
-                    require(bool(self.management_scope_ids),
-                            "Management group hierarchy must be checked before assignment capture.")
-                    assignment_scope = row.get("properties", {}).get("scope", "").lower().rstrip("/")
-                    container = ("/".join(assignment_scope.split("/")[:3])
-                                 if assignment_scope.startswith("/subscriptions/") else assignment_scope)
-                    require(container in self.management_scope_ids,
-                            "ARG returned an assignment outside the selected management group hierarchy.")
-                require(key not in seen_ids, "ARG duplicate ID while paging; retry the capture.")
-                seen_ids.add(key)
+            data, count, total = page.get("data"), page.get("count"), page.get("totalRecords")
+            require(isinstance(data, list), "ARG returned invalid data.")
+            require(type(count) is int and count == len(data), "ARG page count mismatch.")
+            require(type(total) is int and total >= 0, "ARG returned invalid totalRecords.")
+            if expected is None:
+                expected = total
+            require(expected == total, "ARG totalRecords changed during paging. Retry the snapshot.")
+            for row in data:
+                require(isinstance(row, dict), "ARG returned an invalid row.")
+                key = canonical(text(row.get("id"), "ARG id"))
+                require(key not in ids, "ARG returned duplicate IDs. Retry the snapshot.")
+                ids.add(key)
                 rows.append(row)
-            token = result.get("$skipToken")
-            truncated = result.get("resultTruncated")
-            require(truncated in (True, False, "true", "false"), "ARG resultTruncated missing.")
-            if not token:
-                require(truncated in (False, "false") and len(rows) == total,
-                        "ARG result is incomplete; snapshot rejected.")
-                return sorted(rows, key=lambda row: row["id"].lower())
-            require(isinstance(token, str) and token not in tokens and bool(page),
-                    "ARG paging token loop or empty continuation page.")
-            tokens.add(token)
-        raise VerificationError("ARG page budget exceeded.")
-
-    def management_inventory(self) -> tuple[list[dict[str, Any]], set[str]]:
-        root = MG_PREFIX + self.config["_management_group_id"]
-        group = self.request("GET", ARM + root + "?api-version=2020-05-01&$expand=path")
-        assert group is not None
-        require(group.get("id", "").lower() == root, "Management group response ID mismatch.")
-        details = group.get("properties", {}).get("details", {})
-        ancestors = details.get("path", [])
-        require(isinstance(ancestors, list), "Invalid management group ancestor path.")
-        read_scopes = {root, "/"} | {MG_PREFIX + management_group_id(item["name"]) for item in ancestors}
-        parent = details.get("parent") or {}
-        scopes = [{"id": root, "name": self.config["_management_group_id"],
-                   "type": "microsoft.management/managementgroups", "subscriptionId": "",
-                   "tenantId": self.config["tenant_id"], "parentId": parent.get("id", "").lower()}]
-        seen_ids = {root}
-        url = ARM + root + "/descendants?api-version=2020-05-01"
-        seen_urls: set[str] = set()
-        while url:
-            require(urlsplit(url).path.lower() == root + "/descendants" and url not in seen_urls,
-                    "Invalid management group descendants continuation.")
-            seen_urls.add(url)
-            result = self.request("GET", url)
-            assert result is not None
-            require(isinstance(result.get("value"), list), "Invalid management group descendants response.")
-            for item in result["value"]:
-                identifier = item.get("id", "").lower()
-                if identifier.startswith(MG_PREFIX):
-                    name = management_group_id(identifier)
-                    identifier = MG_PREFIX + name
-                    kind, subscription = "microsoft.management/managementgroups", ""
-                else:
-                    require(bool(re.fullmatch(r"/subscriptions/[0-9a-f-]{36}", identifier)),
-                            "Invalid descendant resource ID.")
-                    subscription = guid(identifier.split("/")[2])
-                    name, kind = subscription, "microsoft.resources/subscriptions"
-                parent_id = item.get("properties", {}).get("parent", {}).get("id", "").lower()
-                require(parent_id.startswith(MG_PREFIX), "Descendant parent group is missing.")
-                require(identifier not in seen_ids, "Duplicate management group descendant.")
-                seen_ids.add(identifier)
-                scopes.append({"id": identifier, "name": name, "type": kind,
-                               "subscriptionId": subscription, "tenantId": self.config["tenant_id"],
-                               "parentId": parent_id})
-            url = result.get("nextLink") or ""
-        parents = {item["id"]: item["parentId"] for item in scopes}
-        for item in scopes[1:]:
-            parent_id, visited = item["parentId"], {item["id"]}
-            while parent_id != root:
-                require(parent_id in parents and parent_id not in visited,
-                        "Incomplete or cyclic management group hierarchy.")
-                visited.add(parent_id)
-                parent_id = parents[parent_id]
-        require(sum(bool(item["subscriptionId"]) for item in scopes) < 10000,
-                "Management group contains 10000 or more subscriptions; use a smaller management group.")
-        return sorted(scopes, key=lambda item: item["id"]), read_scopes
-
-    def check_scopes(self) -> list[dict[str, Any]]:
-        selected_group = self.config.get("_management_group_id")
-        require(bool(selected_group), "Select --management-group.")
-        root = MG_PREFIX + selected_group
-        inventory, read_scopes = self.management_inventory()
-        url = ARM + root + (
-            "/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01"
-            "&$filter=atScope()")
-        root_assignments: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        while url:
-            require(url not in seen, "Root assignment pagination loop.")
-            seen.add(url)
-            result = self.request("GET", url)
-            assert result is not None
-            require(isinstance(result.get("value"), list), "Invalid root assignment response.")
-            root_assignments.extend(result["value"])
-            url = result.get("nextLink") or ""
-        require(any(
-            (row.get("properties", {}).get("scope", "").lower().rstrip("/") or "/") in read_scopes
-            and row["properties"].get("principalId", "").lower() == self.auth.principal_id
-            and row["properties"].get("roleDefinitionId", "").lower().rsplit("/", 1)[-1] in READ_ROLES
-            and not row["properties"].get("condition")
-            for row in root_assignments
-        ), "Coverage guard requires an unconditional direct Reader/Contributor/Owner assignment "
-           "to this user at the selected management group/ancestor. "
-           "Group-only/custom-role coverage is not auto-verified.")
-        scopes = self.graph(SCOPE_QUERY)
-        identifiers = {item["id"] for item in inventory}
-        visible = {item["id"].lower() for item in scopes}
-        require(identifiers <= visible, "ARG is missing part of the selected management group hierarchy.")
-        require(not (visible - identifiers - read_scopes),
-                "ARG hierarchy differs from the ARM-discovered management group hierarchy.")
-        self.management_scope_ids = identifiers
-        return inventory
-
-    def capture(self, prechecked_scopes: list[dict[str, Any]] | None = None
-                ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str]:
-        started = stamp()
-        scopes = self.check_scopes()
-        if prechecked_scopes is not None:
-            require(prechecked_scopes == scopes, "Scopes changed since baseline preflight.")
-        roles = self.graph(ROLE_QUERY)
-        role_index(roles)
-        current_scopes = self.check_scopes()
-        require(current_scopes == scopes, "Scopes changed during capture.")
-        return roles, scopes, started, stamp()
-
-    def confirm(self, before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]],
-                targets: list[dict[str, Any]]) -> None:
-        ids = set(before) - set(after)
-        for target, match in resolved_targets(targets, before):
-            if target["selected"]:
-                if match:
-                    ids.add(match)
-        for target, match in resolved_targets(targets, after):
-            if target["selected"] and match:
-                ids.add(match)
-        for key in sorted(ids):
-            actual = self.request("GET", ARM + key + "?api-version=2022-04-01", allow_missing=True)
-            if key not in after:
-                if actual is not None:
-                    raise NotConverged("ARG missing assignment still exists in ARM; retrying.")
-            elif actual is None or role_identity(actual) != role_identity(after[key]):
-                raise NotConverged("ARG and ARM target state differ; retrying.")
+            require(len(rows) <= total, "ARG returned more rows than totalRecords.")
+            truncated = page.get("resultTruncated")
+            require(truncated in (True, False, "true", "false"), "ARG omitted resultTruncated.")
+            next_token = page.get("$skipToken")
+            if next_token:
+                require(isinstance(next_token, str) and next_token not in tokens and count > 0,
+                        "ARG returned a repeated/invalid continuation token.")
+                tokens.add(next_token)
+                token = next_token
+                continue
+            require(truncated in (False, "false") and len(rows) == total,
+                    "ARG results are incomplete; no snapshot was written.")
+            return rows
 
 
-def role_identity(row: dict[str, Any]) -> bytes:
-    properties = row.get("properties", {})
-    definition = properties.get("roleDefinitionId")
-    require(isinstance(definition, str), "Missing roleDefinitionId for identity comparison.")
-    return canonical({
-        **{field: str(properties.get(field) or "").lower()
-           for field in ("scope", "principalId")},
-        "roleDefinitionId": guid(definition.rstrip("/").rsplit("/", 1)[-1]),
-        **{field: properties.get(field) for field in ("condition", "conditionVersion")},
-    })
+def parse_hierarchy(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
 
+    def visit(node: dict[str, Any], parent: str = "") -> None:
+        key = canonical(text(node.get("id"), "hierarchy ID"))
+        require(key not in result, "Duplicate hierarchy ID.")
+        properties = node.get("properties", node)
+        name = text(properties.get("displayName"), "hierarchy display name")
+        if key.startswith(MG_PREFIX.lower()):
+            require("/" not in key[len(MG_PREFIX):], "Invalid management group hierarchy ID.")
+            kind = "ManagementGroup"
+        else:
+            require(bool(re.fullmatch(r"/subscriptions/[0-9a-f-]{36}", key)),
+                    f"Unexpected hierarchy resource: {key}")
+            guid(key.rsplit("/", 1)[-1])
+            kind = "Subscription"
+        result[key] = {"name": name, "parent": parent, "kind": kind}
+        children = properties.get("children", [])
+        require(isinstance(children, list), "Invalid hierarchy children.")
+        for child in children:
+            require(isinstance(child, dict), "Invalid hierarchy child.")
+            visit(child, key)
 
-def role_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    names: set[str] = set()
-    for row in rows:
-        key = assignment_key(row.get("id"))
-        name = guid(row.get("name"))
-        require(key.startswith("/") and key.rsplit("/", 1)[-1] == name,
-                "Assignment name/ARM ID mismatch.")
-        require(key not in result and name not in names, "Duplicate assignment ID or GUID.")
-        properties = row.get("properties")
-        require(isinstance(properties, dict) and all(isinstance(properties.get(field), str)
-                and properties[field] for field in ("scope", "principalId", "roleDefinitionId")),
-                "Missing assignment identity properties.")
-        require(key.rsplit("/providers/microsoft.authorization/roleassignments/", 1)[0]
-                == properties["scope"].lower().rstrip("/"),
-                "Assignment scope/ARM ID mismatch.")
-        result[key] = row
-        names.add(name)
+    visit(payload)
+    require(sum(item["kind"] == "Subscription" for item in result.values()) <= 10000,
+            "ARG management-group queries support at most 10,000 subscriptions.")
     return result
 
 
-def resolved_targets(targets: list[dict[str, Any]], index: dict[str, dict[str, Any]]
-                     ) -> Iterator[tuple[dict[str, Any], str | None]]:
-    names = {key.rsplit("/", 1)[-1]: key for key in index}
-    for target in targets:
-        key = target["key"]
-        yield target, (key if key in index else None) if key.startswith("/") else names.get(key)
+def topology(hierarchy: dict[str, dict[str, str]]) -> dict[str, str]:
+    return {key: value["parent"] for key, value in hierarchy.items()}
 
 
-def compare(before_rows: list[dict[str, Any]], after_rows: list[dict[str, Any]],
-            targets: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    before, after = role_index(before_rows), role_index(after_rows)
-    removed = set(before) - set(after)
-    expected: set[str] = set()
-    results: list[dict[str, Any]] = []
-    current = {row["key"]: key for row, key in resolved_targets(targets, after)}
-    for target, key in resolved_targets(targets, before):
-        if not target["selected"]:
-            continue
-        if key:
-            expected.add(key)
-        status = "NOT_IN_BASELINE" if key is None else (
-            "EXPECTED_DELETED" if key in removed and current[target["key"]] is None
-            else "EXPECTED_REMAINING")
-        results.append({"status": status, "targetKey": target["key"],
-                        "roleAssignmentId": guid((key or target["key"]).rsplit("/", 1)[-1]),
-                        "assignmentId": key or "",
-                        "currentAssignmentId": current[target["key"]] or "",
-                        "excelRows": target["excelRows"]})
-    for key in sorted(removed - expected):
-        results.append({"status": "UNEXPECTED_DELETED", "targetKey": key,
-                        "roleAssignmentId": guid(key.rsplit("/", 1)[-1]),
-                        "assignmentId": key, "currentAssignmentId": "", "excelRows": []})
-    for row in results:
-        status = row["status"]
-        row.update(
-            deleted=None if status == "NOT_IN_BASELINE" else status == "EXPECTED_DELETED",
-            unexpectedDeleted=None if status == "NOT_IN_BASELINE" else status == "UNEXPECTED_DELETED",
-            notDeleted=None if status == "NOT_IN_BASELINE" else status == "EXPECTED_REMAINING",
-            result=RESULT_LABELS[status],
-        )
-    return [before[key] for key in sorted(removed)], results
+def assignment_row(
+    assignment: dict[str, Any], hierarchy: dict[str, dict[str, str]], roles: dict[str, str],
+) -> dict[str, str]:
+    assignment_id = text(assignment.get("id"), "Role Assignment ID")
+    parts = canonical(assignment_id).rsplit(RA_MARKER, 1)
+    require(len(parts) == 2, f"Invalid Role Assignment ID: {assignment_id}")
+    guid(parts[1])
+    scope = text(assignment.get("scope"), "Role Assignment scope")
+    key = canonical(scope)
+    require(key == parts[0], f"Assignment ID/scope mismatch: {assignment_id}")
+    role_id = text(assignment.get("roleDefinitionId"), "roleDefinitionId")
+    role_name = roles.get(role_guid(role_id))
+    if not role_name:
+        raise VerificationError(f"Role name was not resolved: {role_id}")
+    subscription_id, subscription_name, rg_name, resource_name = "", "", "", ""
+    if key in hierarchy and hierarchy[key]["kind"] == "ManagementGroup":
+        mg_id, scope_type = key, "ManagementGroup"
+    else:
+        segments = scope.strip("/").split("/")
+        require(len(segments) >= 2 and segments[0].lower() == "subscriptions",
+                f"Assignment is outside the management group hierarchy: {scope}")
+        subscription_id = guid(segments[1])
+        subscription_key = "/subscriptions/" + subscription_id
+        require(subscription_key in hierarchy, f"Unknown subscription: {subscription_id}")
+        subscription_name = hierarchy[subscription_key]["name"]
+        mg_id = hierarchy[subscription_key]["parent"]
+        scope_type = "Subscription"
+        if len(segments) > 2:
+            resource_start = 2
+            if segments[2].lower() == "resourcegroups":
+                require(len(segments) >= 4, f"Invalid resource group scope: {scope}")
+                rg_name, scope_type, resource_start = segments[3], "ResourceGroup", 4
+            if len(segments) > resource_start:
+                require(segments[resource_start].lower() == "providers" and
+                        len(segments) >= resource_start + 4, f"Invalid resource scope: {scope}")
+                resource_name, scope_type = segments[-1], "Resource"
+    require(mg_id in hierarchy, f"Unknown parent management group: {mg_id}")
+    return dict(zip(FIELDS, (
+        assignment_id, hierarchy[mg_id]["name"], subscription_name, rg_name, resource_name,
+        role_name, scope, scope_type, mg_id[len(MG_PREFIX):], subscription_id, role_id,
+        guid(text(assignment.get("principalId"), "principalId")),
+    )))
 
 
-def event(run_id: str, phase: str, record_type: str, **fields: Any) -> dict[str, Any]:
-    value = {"RunId": run_id, "Phase": phase, "RecordType": record_type, **fields}
-    value["EventId"] = "event-" + hashlib.sha256(canonical(value)).hexdigest()
+def safe_cell(value: str) -> str:
+    if value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
     return value
-
-
-def timestamped_name(name: str, file_timestamp: str) -> str:
-    require(bool(re.fullmatch(r"\d{8}_\d{6}_KST", file_timestamp)), "Invalid file timestamp.")
-    source = Path(name)
-    require(source.name == name and name not in ("", ".", ".."), "Invalid evidence file name.")
-    return f"{source.stem}_{file_timestamp}{source.suffix}"
 
 
 def metadata_path(path: Path) -> Path:
-    candidates = list(path.glob("metadata_*.json"))
-    if (path / "metadata.json").is_file():
-        candidates.append(path / "metadata.json")
-    require(len(candidates) == 1, "Expected exactly one phase metadata file.")
-    return candidates[0]
+    return path.with_suffix(path.suffix + ".metadata.json")
 
 
-def phase_file(path: Path, logical_name: str) -> Path:
-    metadata = read_json(metadata_path(path))
-    name = metadata.get("files", {}).get(logical_name, logical_name)
-    if logical_name == "delivery.json":
-        name = (timestamped_name(logical_name, metadata["file_timestamp"])
-                if "file_timestamp" in metadata else logical_name)
-    else:
-        require(name in metadata["hashes"], f"Missing evidence registration: {logical_name}.")
-    require(Path(name).name == name and name not in ("", ".", ".."), "Invalid evidence file name.")
-    return path / name
+def assignment_key(value: str, scope: str) -> str:
+    value = canonical(text(value, "RoleAssignmentId"))
+    scope = canonical(text(scope, "Scope"))
+    require(scope.startswith("/"), "Invalid snapshot scope.")
+    if value.startswith("/"):
+        parts = value.rsplit(RA_MARKER, 1)
+        require(len(parts) == 2 and parts[0] == scope, "Invalid snapshot assignment ID.")
+        value = parts[1]
+    return scope + RA_MARKER + guid(value)
 
 
-def commit_phase(directory: Path, phase: str, files: dict[str, list[dict[str, Any]]],
-                 metadata: dict[str, Any]) -> Path:
-    destination = directory / phase
-    require(not destination.exists(), f"{phase} already exists; refusing to overwrite evidence.")
-    finished = datetime.fromisoformat(metadata.get("finished_at") or stamp())
-    require(finished.tzinfo is not None, "Evidence timestamp must include a timezone.")
-    file_timestamp = finished.astimezone(KST).strftime("%Y%m%d_%H%M%S_KST")
-    names = {name: timestamped_name(name, file_timestamp) for name in files}
-    staging = Path(tempfile.mkdtemp(prefix=f"{phase}-pending-{file_timestamp}-", dir=directory))
-    for filename, rows in files.items():
-        write_jsonl(staging / names[filename], rows)
-    if "verification.jsonl" in files:
-        names["verification.csv"] = timestamped_name("verification.csv", file_timestamp)
-        write_verification_csv(staging / names["verification.csv"], files["verification.jsonl"])
-    metadata.update(file_timestamp=file_timestamp, files=names,
-                    hashes={name: digest(staging / name) for name in names.values()})
-    write_json(staging / timestamped_name("metadata.json", file_timestamp), metadata)
-    os.rename(staging, destination)
-    return destination
-
-
-def verify_phase(path: Path) -> dict[str, Any]:
-    manifest_path = metadata_path(path)
-    metadata = read_json(manifest_path)
-    require(isinstance(metadata.get("hashes"), dict), "Missing phase evidence hashes.")
-    if "file_timestamp" in metadata:
-        require(manifest_path.name == timestamped_name("metadata.json", metadata["file_timestamp"]),
-                "Metadata filename/timestamp mismatch.")
-        files = metadata.get("files")
-        require(isinstance(files, dict) and set(files.values()) == set(metadata["hashes"])
-                and len(files) == len(set(files.values())), "Invalid evidence file registration.")
-        for logical_name, filename in files.items():
-            require(filename == timestamped_name(logical_name, metadata["file_timestamp"]),
-                    "Evidence filename/timestamp mismatch.")
-    for name, expected in metadata["hashes"].items():
-        require(Path(name).name == name and digest(path / name) == expected,
-                "Evidence hash mismatch; refusing to continue.")
-    return metadata
-
-
-def batches(rows: list[dict[str, Any]], limit: int = 1024 * 1024) -> Iterator[bytes]:
-    current: list[bytes] = []
-    size = 2
+def save_csv(path: Path, rows: list[dict[str, str]], metadata: dict[str, Any]) -> None:
+    companion = metadata_path(path)
+    require(path.suffix.lower() == ".csv", "Output filename must end in .csv.")
+    require(not path.exists() and not companion.exists(), "Output already exists; choose a new filename.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=FIELDS)
+    writer.writeheader()
     for row in rows:
-        require(all(not isinstance(value, str) or len(value.encode("utf-8")) <= 30000
-                    for value in row.values()), "Log field exceeds safe size.")
-        encoded = canonical(row)
-        require(len(encoded) + 2 <= limit, "Log record exceeds batch limit.")
-        extra = len(encoded) + (1 if current else 0)
-        if size + extra > limit:
-            yield b"[" + b",".join(current) + b"]"
-            current, size = [], 2
-        size += len(encoded) + (1 if current else 0)
-        current.append(encoded)
-    if current:
-        yield b"[" + b",".join(current) + b"]"
+        assignment_id = assignment_key(row["RoleAssignmentId"], row["Scope"])
+        output_row = dict(row, RoleAssignmentId=assignment_id.rsplit("/", 1)[-1])
+        writer.writerow({key: safe_cell(output_row[key]) for key in FIELDS})
+    data = buffer.getvalue().encode("utf-8-sig")
+    metadata = dict(metadata, schemaVersion=2, rowCount=len(rows),
+                    csvSha256=hashlib.sha256(data).hexdigest())
+    # Exclusive creation preserves evidence. A failed/interrupted pair cannot pass load_csv.
+    with path.open("xb") as file:
+        file.write(data)
+    with companion.open("x", encoding="utf-8") as file:
+        json.dump(metadata, file, ensure_ascii=False, indent=2)
+        file.write("\n")
 
 
-def log_headers(workspace_id: str, key: bytes, body: bytes, log_type: str,
-                timestamp: str) -> dict[str, str]:
-    message = f"POST\n{len(body)}\napplication/json\nx-ms-date:{timestamp}\n/api/logs"
-    signature = base64.b64encode(hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest())
-    return {"Authorization": f"SharedKey {workspace_id}:{signature.decode('ascii')}",
-            "Content-Type": "application/json", "Log-Type": log_type,
-            "x-ms-date": timestamp, "time-generated-field": "ObservedAt"}
+def load_csv(path: Path) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
+    data = path.read_bytes()
+    metadata = json.loads(metadata_path(path).read_text(encoding="utf-8"))
+    require(isinstance(metadata, dict) and metadata.get("schemaVersion") in (1, 2) and
+            metadata.get("kind") == "snapshot", "Input is not a supported snapshot.")
+    require(metadata.get("csvSha256") == hashlib.sha256(data).hexdigest(),
+            f"CSV checksum mismatch: {path}")
+    reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig"), newline=""), strict=True)
+    require(reader.fieldnames == list(FIELDS), f"Snapshot CSV header mismatch: {path}")
+    rows: dict[str, dict[str, str]] = {}
+    for row in reader:
+        require(set(row) == set(FIELDS) and all(isinstance(v, str) for v in row.values()),
+                f"Malformed snapshot row: {path}")
+        value = text(row.get("RoleAssignmentId"), "RoleAssignmentId")
+        if metadata["schemaVersion"] == 1:
+            require(value.startswith("/"), "Schema 1 requires a full Role Assignment ID.")
+        else:
+            guid(value)
+        key = assignment_key(value, row["Scope"])
+        require(key not in rows, f"Duplicate RoleAssignmentId in snapshot: {path}")
+        row["RoleAssignmentId"] = key
+        rows[key] = row
+    require(metadata.get("rowCount") == len(rows), f"Snapshot row count mismatch: {path}")
+    return rows, metadata
 
 
-def workspace_key(config: dict[str, Any]) -> bytes:
-    raw = os.environ.get(config["workspace_key_env"]) or getpass.getpass("Workspace shared key: ")
-    try:
-        value = base64.b64decode(raw.strip(), validate=True)
-    except (binascii.Error, ValueError):
-        raise VerificationError("Workspace key must be valid Base64.") from None
-    require(len(value) >= 16, "Workspace key is too short.")
-    return value
-
-
-def deliver(path: Path, config: dict[str, Any], key: bytes, wire: Wire) -> None:
-    verify_phase(path)
-    destination = {"workspace_id": config["workspace_id"], "log_type": config["log_type"]}
-    checkpoint_path = phase_file(path, "delivery.json")
-    checkpoint = read_json(checkpoint_path) if checkpoint_path.exists() else {
-        **destination, "next_batch": 0, "accepted": False,
+def snapshot(client: AzureCLI, group: str, output: Path) -> int:
+    started = stamp()
+    identity = client.identity()
+    hierarchy = client.hierarchy(group, identity["tenantId"])
+    subscriptions = {
+        canonical(text(row.get("id"), "subscription ID"))
+        for row in client.query(group, SUBSCRIPTIONS_QUERY)
     }
-    require(all(checkpoint.get(name) == value for name, value in destination.items()),
-            "Log destination changed after delivery began.")
-    payloads = list(batches(read_jsonl(phase_file(path, "events.jsonl"))))
-    require(type(checkpoint.get("next_batch")) is int
-            and 0 <= checkpoint["next_batch"] <= len(payloads), "Invalid delivery checkpoint.")
-    url = f"https://{config['workspace_id']}.ods.opinsights.azure.com/api/logs?api-version=2016-04-01"
-    for number in range(checkpoint["next_batch"], len(payloads)):
-        body = payloads[number]
-        for attempt in range(5):
-            try:
-                status, _ = wire.send("POST", url, log_headers(
-                    config["workspace_id"], key, body, config["log_type"],
-                    format_datetime(now().astimezone(timezone.utc), usegmt=True)), body)
-                require(status == 200, "Log Analytics did not accept the batch.")
-                break
-            except HttpFailure as exc:
-                if attempt == 4 or (exc.status not in (0, 429) and exc.status < 500):
-                    raise
-                time.sleep(max(exc.retry_after, min(30, 2 ** attempt)))
-        checkpoint["next_batch"] = number + 1
-        write_json(checkpoint_path, checkpoint)
-    checkpoint["accepted"] = True
-    checkpoint["accepted_at"] = stamp()
-    write_json(checkpoint_path, checkpoint)
+    expected = {key for key, value in hierarchy.items() if value["kind"] == "Subscription"}
+    require(subscriptions == expected, "ARM hierarchy and ARG subscription coverage differ. Check access and retry.")
+    assignments = client.query(group, ASSIGNMENTS_QUERY)
+    roles: dict[str, str] = {}
+    if assignments:
+        for row in client.query(group, ROLES_QUERY, "AtScopeAboveAndBelow"):
+            key = role_guid(text(row.get("id"), "role ID"))
+            name = text(row.get("roleName"), "roleName")
+            require(key not in roles or roles[key] == name, f"Conflicting role names: {key}")
+            roles[key] = name
+        for assignment in assignments:
+            role_id = text(assignment.get("roleDefinitionId"), "roleDefinitionId")
+            key = role_guid(role_id)
+            if key not in roles:
+                print(f"WARNING: ARG role name missing; resolving with ARM: {key}", file=sys.stderr)
+                role = client.rest(role_id + "?api-version=2022-04-01")
+                require(role_guid(text(role.get("id"), "ARM role ID")) == key, "ARM role ID mismatch.")
+                roles[key] = text(role.get("properties", {}).get("roleName"), "ARM roleName")
+    rows = [assignment_row(item, hierarchy, roles) for item in assignments]
+    require(topology(client.hierarchy(group, identity["tenantId"])) == topology(hierarchy),
+            "Management group hierarchy changed during collection. Retry.")
+    require(client.identity() == identity, "Azure CLI identity changed during collection.")
+    save_csv(output, sorted(rows, key=lambda row: canonical(row["RoleAssignmentId"])), {
+        "kind": "snapshot", **identity, "managementGroupId": group.lower(),
+        "startedAt": started, "completedAt": stamp(), "topology": topology(hierarchy),
+        "authorizationScopeFilter": "AtScopeAndBelow",
+    })
+    print(f"Snapshot: {output} ({len(rows)} assignments)")
+    print("WARNING: ARG reflects readable, indexed state, not an atomic backup. "
+          "Keep read permissions unchanged; recheck absence with ARM/Activity Log.", file=sys.stderr)
+    return 0
 
 
-@contextlib.contextmanager
-def run_lock(directory: Path) -> Iterator[None]:
-    directory.mkdir(parents=True, exist_ok=True)
-    lock = directory / ".lock"
+def diff(before: Path, after: Path, output: Path) -> int:
+    old, old_meta = load_csv(before)
+    new, new_meta = load_csv(after)
+    for field in ("tenantId", "accountFingerprint", "managementGroupId", "topology", "authorizationScopeFilter"):
+        require(field in old_meta and old_meta[field] == new_meta.get(field),
+                f"Snapshots are not comparable: {field} differs or is missing.")
     try:
-        stream = lock.open("x", encoding="ascii")
-    except FileExistsError:
-        raise VerificationError("Run is locked; confirm no process is running before removing .lock.") from None
-    try:
-        with stream:
-            stream.write(str(os.getpid()))
-            stream.flush()
-            yield
-    finally:
-        lock.unlink()
-
-
-def contract(config: dict[str, Any]) -> dict[str, Any]:
-    value = {field: config[field] for field in (
-        "tenant_id", "excel_path", "sheet_name", "active_only",
-        "workspace_id", "log_type",
-    )}
-    value["local_only"] = config.get("_local_only", False)
-    if config.get("_management_group_id"):
-        value.update(management_group_id=config["_management_group_id"],
-                     authorization_scope_filter="AtScopeAndBelow")
-    return value
-
-
-def execute(config: dict[str, Any], run_date: date | None = None, upload_only: bool = False,
-            *, local_only: bool = False,
-            before_file: Path | None = None, management_group: str | None = None) -> int:
-    require(not local_only or not upload_only, "--upload-only cannot be combined with --local-only.")
-    require(not upload_only or before_file is not None, "--upload-only requires --before <A-file>.")
-    require(management_group is not None, "Execution requires --management-group.")
-    config = dict(config)
-    config["_local_only"] = local_only
-    config["_management_group_id"] = management_group_id(management_group)
-    print(f"Management group: {MG_PREFIX}{config['_management_group_id']} (this scope and below).",
-          flush=True)
-    event_context = {"ManagementGroupScope": MG_PREFIX + config["_management_group_id"]}
-    require(bool(config.get("workspace_id")) or local_only,
-            "Workspace ID is required unless --local-only is used.")
-    if before_file is not None:
-        before_file = before_file.resolve()
-        require(before_file.is_file() and before_file.parent.name == "before",
-                "--before must identify a committed A file inside its original before folder.")
-        selected_metadata = verify_phase(before_file.parent)
-        require(before_file == phase_file(before_file.parent, "A.jsonl").resolve(),
-                "--before must select the A file registered in the phase metadata.")
-        baseline_date = date.fromisoformat(before_file.parent.parent.name)
-        require(run_date is None or run_date == baseline_date, "--run-date does not match the A file.")
-        run_date = baseline_date
-        require(selected_metadata.get("run_date", run_date.isoformat()) == run_date.isoformat(),
-                "Baseline date metadata mismatch.")
-        directory = before_file.parent.parent
-        require(directory == (Path(config["output_directory"]) / run_date.isoformat()).resolve(),
-                "Selected A file is outside the configured output directory.")
-    else:
-        run_date = run_date or now().astimezone(KST).date()
-        directory = Path(config["output_directory"]) / run_date.isoformat()
-    wire = Wire()
-    with run_lock(directory):
-        before_path, after_path = directory / "before", directory / "after"
-        require(before_file is not None or not before_path.exists(),
-                "A baseline already exists. Specify --before <A-file> for comparison or upload retry.")
-        require(before_file is None or before_path.exists(), "Selected baseline no longer exists.")
-        baseline = verify_phase(before_path) if before_path.exists() else None
-        if baseline:
-            previous_contract = dict(baseline["contract"])
-            previous_contract.pop("expected_subscription_ids", None)
-            previous_contract.setdefault("local_only", False)
-            require(previous_contract == contract(config), "Baseline config contract changed.")
-        require(not after_path.exists() or baseline is not None, "After evidence has no baseline.")
-        completed = verify_phase(after_path) if after_path.exists() else None
-        if completed:
-            require(completed["run_id"] == baseline["run_id"], "Before/after run mismatch.")
-            if "baseline_sha256" in completed:
-                require(before_file is not None and completed["baseline_sha256"] == digest(before_file),
-                        "Completed comparison refers to a different A file.")
-        key = None if local_only else workspace_key(config)
-        for path in (before_path, after_path):
-            if path.exists() and key is not None:
-                deliver(path, config, key, wire)
-        if upload_only or completed:
-            require(baseline is not None, "No evidence to upload.")
-            print(f"Existing evidence {'preserved locally' if local_only else 'accepted by ingestion API'}: "
-                  f"{directory}", flush=True)
-            return completed["exit_code"] if completed else 0
-
-        excel = Path(config["excel_path"])
-        if baseline:
-            require(digest(excel) == baseline["excel_sha256"], "Excel changed since baseline capture.")
-            boundary = datetime.combine(run_date, wall_time(18), KST)
-            require(now() >= boundary,
-                    "Before phase complete. Run again after deletion finishes.")
-        else:
-            require(run_date == now().astimezone(KST).date(), "Baseline must be captured today (KST).")
-            boundary = datetime.combine(run_date, wall_time(18), KST)
-            require(now() < boundary,
-                    "Too late to create a pre-deletion baseline.")
-        auth = CliAuth(config["tenant_id"])
-        azure = Azure(config, auth, wire)
-        if baseline:
-            assert before_file is not None
-            require(auth.principal_id == baseline["principal_id"], "Baseline Entra user changed.")
-            targets = read_jsonl(phase_file(before_path, "X.jsonl"))
-            before_rows = read_jsonl(phase_file(before_path, "A.jsonl"))
-            before = role_index(before_rows)
-            previous = None
-            capture = None
-            for attempt in range(config["capture_attempts"]):
-                capture = azure.capture()
-                rows, scopes, started, finished = capture
-                require(scopes == read_jsonl(phase_file(before_path, "scopes.jsonl")),
-                        "Management group/subscription inventory changed; comparison rejected.")
-                try:
-                    azure.confirm(before, role_index(rows), targets)
-                except NotConverged as exc:
-                    print(str(exc), file=sys.stderr, flush=True)
-                    previous = None
-                else:
-                    if previous == rows:
-                        break
-                    previous = rows
-                if attempt + 1 < config["capture_attempts"]:
-                    time.sleep(config["stability_seconds"])
-            else:
-                raise VerificationError("ARG/ARM did not converge; B was not committed. Retry later.")
-            assert capture is not None
-            rows, scopes, started, finished = capture
-            deleted, results = compare(before_rows, rows, targets)
-            counter = Counter(row["status"] for row in results)
-            counts = {status: counter[status] for status in (
-                "EXPECTED_DELETED", "EXPECTED_REMAINING", "NOT_IN_BASELINE", "UNEXPECTED_DELETED")}
-            code = 2 if any(row["status"] != "EXPECTED_DELETED" for row in results) else 0
-            run_id = baseline["run_id"]
-            events = [event(run_id, "After", "Verification", **event_context, ObservedAt=finished,
-                            Status=row["status"], TargetKey="target:" + row["targetKey"],
-                            RoleAssignmentGuid=row["roleAssignmentId"],
-                            RoleAssignmentId=row["assignmentId"],
-                            DeletedNormally=row["deleted"],
-                            DeletedUnexpectedly=row["unexpectedDeleted"],
-                            NotDeleted=row["notDeleted"], DeletionResult=row["result"],
-                            CurrentAssignmentId=row["currentAssignmentId"],
-                            ExcelRows=",".join(map(str, row["excelRows"])),
-                            PrincipalKey="principal:" + before.get(row["assignmentId"], {}).get(
-                                "properties", {}).get("principalId", ""),
-                            RoleDefinitionId=before.get(row["assignmentId"], {}).get(
-                                "properties", {}).get("roleDefinitionId", ""))
-                      for row in results]
-            after = role_index(rows)
-            summary = {"status": "REVIEW_REQUIRED" if code else "MATCHED", "counts": counts,
-                       "before": len(before_rows), "after": len(rows), "deleted": len(deleted),
-                       "added": len(set(after) - set(before)),
-                       "modified": sum(role_identity(before[item]) != role_identity(after[item])
-                                       for item in set(before) & set(after))}
-            summary.update(mode="MANAGEMENT_GROUP",
-                           management_group_id=config["_management_group_id"],
-                           scope=MG_PREFIX + config["_management_group_id"])
-            if local_only:
-                summary["log_analytics"] = "NOT_SENT_LOCAL_ONLY"
-            events.append(event(run_id, "After", "Summary", **event_context, ObservedAt=finished,
-                                Status=summary["status"], BeforeCount=len(before_rows),
-                                AfterCount=len(rows), DeletedCount=len(deleted),
-                                AddedCount=summary["added"], ModifiedCount=summary["modified"],
-                                CountsJson=json.dumps(counts, sort_keys=True)))
-            path = commit_phase(directory, "after", {
-                "B.jsonl": rows, "C.jsonl": deleted, "verification.jsonl": results,
-                "events.jsonl": events, "summary.jsonl": [summary],
-            }, {"run_id": run_id, "run_date": run_date.isoformat(),
-                "baseline_file": str(before_file), "baseline_sha256": digest(before_file),
-                "started_at": started, "finished_at": finished, "exit_code": code})
-            print(json.dumps(summary, ensure_ascii=False), flush=True)
-            print(f"B committed: {phase_file(path, 'B.jsonl')}", flush=True)
-            print(f"Final results: {phase_file(path, 'verification.csv')}", flush=True)
-        else:
-            excel_hash = digest(excel)
-            targets = load_targets(excel, config["sheet_name"], config["active_only"])
-            require(digest(excel) == excel_hash, "Excel changed while being read.")
-            prechecked_scopes = azure.check_scopes()
-            preflight_checked_at = stamp()
-            start = datetime.combine(run_date, wall_time(17, 59), KST)
-            while now() < start:
-                print(f"Waiting for {start.isoformat()} (keep this PC awake).", flush=True)
-                time.sleep(max(0, min(60, (start - now()).total_seconds())))
-            require(now() < boundary,
-                    "Baseline capture missed the pre-deletion window.")
-            rows, scopes, started, finished = azure.capture(prechecked_scopes)
-            require(now() < boundary,
-                    "Baseline did not finish before 18:00; A was not committed.")
-            index = role_index(rows)
-            selected_ids = [key for row, key in resolved_targets(targets, index) if row["selected"]]
-            missing = sum(item is None for item in selected_ids)
-            if missing:
-                print(f"WARNING: {missing} selected targets are absent from A; "
-                      "their deletion cannot be proven.", file=sys.stderr, flush=True)
-            require(len([item for item in selected_ids if item]) == len(set(
-                item for item in selected_ids if item)), "Excel GUID/full-ID aliases duplicate a target.")
-            run_id = "run-" + str(uuid4())
-            path = commit_phase(directory, "before", {
-                "A.jsonl": rows, "X.jsonl": targets, "scopes.jsonl": scopes,
-                "events.jsonl": [event(run_id, "Before", "Summary", **event_context, ObservedAt=finished,
-                                       Status="BASELINE_CAPTURED", BeforeCount=len(rows),
-                                       SelectedCount=len(selected_ids),
-                                       MissingBaselineCount=missing)],
-            }, {"run_id": run_id, "run_date": run_date.isoformat(),
-                "principal_id": auth.principal_id, "contract": contract(config),
-                "excel_sha256": excel_hash, "started_at": started, "finished_at": finished,
-                "preflight_checked_at": preflight_checked_at,
-                "baseline_deadline": boundary.isoformat()})
-            code = 0
-            print(f"A committed: {phase_file(path, 'A.jsonl')}", flush=True)
-            print("After deletion finishes, run again with --before pointing to this A file.", flush=True)
-        if key is not None:
-            deliver(path, config, key, wire)
-            print("Log Analytics HTTP 200: accepted, not yet query-verified.", flush=True)
-        else:
-            print("LOCAL ONLY: evidence saved; Log Analytics NOT sent or verified.", flush=True)
-        return code
+        old_start = datetime.fromisoformat(old_meta["startedAt"])
+        old_end = datetime.fromisoformat(old_meta["completedAt"])
+        new_start = datetime.fromisoformat(new_meta["startedAt"])
+        new_end = datetime.fromisoformat(new_meta["completedAt"])
+        require(all(value.tzinfo is not None for value in (old_start, old_end, new_start, new_end)),
+                "Snapshot timestamps must include a timezone.")
+        require(old_start <= old_end <= new_start <= new_end and old_start < new_start,
+                "Use non-overlapping snapshots in chronological order.")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise VerificationError("Missing or invalid snapshot timestamps.") from exc
+    deleted = [old[key] for key in sorted(old.keys() - new.keys())]
+    save_csv(output, deleted, {
+        "kind": "diff", "createdAt": stamp(), "before": str(before.resolve()),
+        "after": str(after.resolve()), "beforeSha256": old_meta["csvSha256"],
+        "afterSha256": new_meta["csvSha256"],
+        "meaning": "Present before, absent after in ARG; not proof of deletion actor or cause.",
+    })
+    print(f"Removed from snapshot: {len(deleted)}; added: {len(new.keys() - old.keys())}; CSV: {output}")
+    print("WARNING: Absence in ARG is a deletion candidate, not proof of a successful delete operation.",
+          file=sys.stderr)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only daily Azure RBAC deletion verifier.")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--management-group", required=True,
-                        help="Management group ID or ARM ID; descendants are discovered.")
-    parser.add_argument("--before", type=Path,
-                        help="Committed A JSONL path; required for comparison and upload retry.")
-    parser.add_argument("--run-date", type=date.fromisoformat,
-                        help="Optional KST date; must match --before if supplied.")
-    parser.add_argument("--upload-only", action="store_true", help="Retry saved logs without recapture.")
-    parser.add_argument("--local-only", action="store_true",
-                        help="Save local evidence only; no Workspace ID/Key or Log Analytics ingestion required.")
+    parser = argparse.ArgumentParser(description="Read-only MG Role Assignment snapshots and CSV comparison.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    capture = commands.add_parser("snapshot", help="Collect using the current az login user.")
+    capture.add_argument("--management-group", required=True, help="MG ID or full ARM ID.")
+    capture.add_argument("--output", required=True, type=Path, help="New .csv filename.")
+    compare = commands.add_parser("diff", help="Compare local snapshots; no Azure login required.")
+    compare.add_argument("--before", required=True, type=Path)
+    compare.add_argument("--after", required=True, type=Path)
+    compare.add_argument("--output", required=True, type=Path, help="New deleted-assignment .csv filename.")
     args = parser.parse_args(argv)
-    if not args.local_only:
-        print("WARNING: legacy Data Collector API support ended 2026-09-14; ingestion continues.",
-              file=sys.stderr, flush=True)
     try:
-        config = load_config(args.config.resolve(), local_only=args.local_only)
-        return execute(config, args.run_date, args.upload_only, local_only=args.local_only,
-                       before_file=args.before, management_group=args.management_group)
-    except (VerificationError, OSError, ValueError, KeyError, ImportError) as exc:
-        if isinstance(exc, VerificationError):
-            message = str(exc)
-        else:
-            message = f"{type(exc).__name__}; check input files, dependencies and saved evidence."
-        print("ERROR: " + message, file=sys.stderr, flush=True)
+        if args.command == "snapshot":
+            group = management_group(args.management_group)
+            require(args.output.suffix.lower() == ".csv", "Output filename must end in .csv.")
+            require(not args.output.exists() and not metadata_path(args.output).exists(),
+                    "Output already exists; choose a new filename.")
+            return snapshot(AzureCLI(), group, args.output)
+        return diff(args.before, args.after, args.output)
+    except (VerificationError, OSError, ValueError, csv.Error) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("Interrupted; committed evidence is preserved.", file=sys.stderr, flush=True)
+        print("ERROR: Interrupted. Do not use any incomplete output pair.", file=sys.stderr)
         return 130
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
