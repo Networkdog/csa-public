@@ -26,16 +26,19 @@ $script:RaFields = @(
     'ResourceName', 'RoleName', 'Scope', 'ScopeType', 'ManagementGroupId',
     'SubscriptionId', 'RoleDefinitionId', 'PrincipalId'
 )
-$script:RaInitialPartitions = 16
-$script:RaRowLimit = 500
+$script:RaInitialPartitions = 1
+$script:RaRowLimit = 1000
 $script:RaMaxModulus = 1048576
 $script:RaContext = $null
+$script:RaStage = 'initialization'
 $script:RaAssignmentsQuery = @'
 AuthorizationResources
 | where type =~ 'microsoft.authorization/roleassignments'
+| where properties.principalType =~ 'User'
 | project id, scope=tostring(properties.scope),
     roleDefinitionId=tostring(properties.roleDefinitionId),
-    principalId=tostring(properties.principalId)
+    principalId=tostring(properties.principalId),
+    principalType=tostring(properties.principalType)
 | order by id asc
 '@
 $script:RaRolesQuery = @'
@@ -104,6 +107,23 @@ function Get-RaGroup {
 
 function Get-RaStamp {
     return [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.ffffffzzz', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Resolve-RaFilePath {
+    param([string]$Path)
+    $provider = $null
+    $drive = $null
+    $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+        (Get-RaText $Path 'file path'), [ref]$provider, [ref]$drive
+    )
+    Assert-Ra ($provider.Name -ceq 'FileSystem') 'CSV paths must use the FileSystem provider.'
+    return $resolved
+}
+
+function Write-RaStage {
+    param([string]$Stage)
+    $script:RaStage = $Stage
+    [Console]::Error.WriteLine("INFO: $Stage")
 }
 
 function Get-RaHash {
@@ -190,6 +210,7 @@ function Get-RaPartition {
     $attempt = 1
     while ($true) {
         try {
+            Write-Verbose "ARG request: $label, attempt=$attempt/$Attempts"
             $page = Invoke-RaRest '/providers/Microsoft.ResourceGraph/resources?api-version=2024-04-01' @{
                 managementGroups = @($Group); query = $partitionQuery
                 options = @{
@@ -218,6 +239,7 @@ function Get-RaPartition {
             if ($count -ne $total -or $isTruncated -or $token) {
                 throw [RaRetryableError]::new("ARG partition is incomplete: $label, count=$count, totalRecords=$total.")
             }
+            Write-Verbose "ARG complete: $label, rows=$count"
             return @{ split = $false; rows = $data }
         }
         catch [RaRetryableError] {
@@ -383,7 +405,7 @@ function ConvertTo-RaCsvCell {
 
 function Save-RaCsv {
     param([string]$Path, [array]$Rows, [System.Collections.IDictionary]$Metadata)
-    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullPath = Resolve-RaFilePath $Path
     $companion = $fullPath + '.metadata.json'
     Assert-Ra ([IO.Path]::GetExtension($fullPath) -ieq '.csv') 'Output must end in .csv.'
     Assert-Ra (-not [IO.File]::Exists($fullPath) -and -not [IO.File]::Exists($companion)) 'Output already exists; choose a new filename.'
@@ -402,10 +424,13 @@ function Save-RaCsv {
     $bytes = [byte[]](@(0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes($builder.ToString()))
     $metadataCopy = @{}
     foreach ($key in $Metadata.Keys) { $metadataCopy[$key] = $Metadata[$key] }
-    $metadataCopy.schemaVersion = 2; $metadataCopy.rowCount = $Rows.Count
+    $metadataCopy.schemaVersion = if ($metadataCopy.ContainsKey('principalTypeFilter')) { 3 } else { 2 }
+    $metadataCopy.rowCount = $Rows.Count
     $metadataCopy.csvSha256 = Get-RaHash $bytes
+    Write-RaStage "Writing CSV: $fullPath"
     $stream = [IO.File]::Open($fullPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    Write-RaStage "Writing metadata: $companion"
     $stream = [IO.File]::Open($companion, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
     try { $writer.Write((ConvertTo-Json -InputObject $metadataCopy -Depth 50) + "`n") }
@@ -414,10 +439,17 @@ function Save-RaCsv {
 
 function Read-RaCsv {
     param([string]$Path)
-    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullPath = Resolve-RaFilePath $Path
+    Write-RaStage "Reading snapshot: $fullPath"
     $bytes = [IO.File]::ReadAllBytes($fullPath)
     $metadata = ConvertFrom-RaJson ([IO.File]::ReadAllText($fullPath + '.metadata.json'))
-    Assert-Ra ($metadata -is [System.Collections.IDictionary] -and (Get-RaProperty $metadata 'schemaVersion') -in @(1, 2) -and (Get-RaProperty $metadata 'kind') -ceq 'snapshot') 'Input is not a supported snapshot.'
+    Assert-Ra ($metadata -is [System.Collections.IDictionary] -and (Get-RaProperty $metadata 'schemaVersion') -in @(1, 2, 3) -and (Get-RaProperty $metadata 'kind') -ceq 'snapshot') 'Input is not a supported snapshot.'
+    if ($metadata.schemaVersion -eq 3) {
+        Assert-Ra ((Get-RaProperty $metadata 'principalTypeFilter') -ceq 'User') 'Schema 3 requires the User principal filter.'
+    }
+    else {
+        Assert-Ra (-not $metadata.Contains('principalTypeFilter')) 'Legacy snapshots cannot declare a principal filter.'
+    }
     Assert-Ra ((Get-RaProperty $metadata 'csvSha256') -ceq (Get-RaHash $bytes)) "CSV checksum mismatch: $Path"
     $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF)
     $parser = [Microsoft.VisualBasic.FileIO.TextFieldParser]::new([IO.StringReader]::new($text))
@@ -463,17 +495,26 @@ function Get-RaInstant {
 
 function Invoke-RaSnapshot {
     param([string]$Group, [string]$Path, [int]$Attempts = 3)
+    $Path = Resolve-RaFilePath $Path
     $started = Get-RaStamp
+    Write-RaStage 'Checking Azure PowerShell user context'
     $identity = Get-RaIdentity
+    Write-RaStage 'Reading management group hierarchy'
     $hierarchy = Get-RaHierarchy $Group $identity.tenantId
+    Write-RaStage 'Collecting ARG subscriptions'
     $subscriptions = Get-RaQuery $Group $script:RaSubscriptionsQuery 'AtScopeAndBelow' $Attempts
     $actual = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($row in $subscriptions) { $null = $actual.Add((Get-RaCanonical $row.id)) }
     $expected = @($hierarchy.Keys | Where-Object { $hierarchy[$_].kind -ceq 'Subscription' })
     Assert-Ra ($actual.SetEquals([string[]]$expected)) 'ARM hierarchy and ARG subscription coverage differ.'
+    Write-RaStage 'Collecting ARG role assignments (direct User assignments only)'
     $assignments = Get-RaQuery $Group $script:RaAssignmentsQuery 'AtScopeAndBelow' $Attempts
+    foreach ($assignment in $assignments) {
+        Assert-Ra ((Get-RaProperty $assignment 'principalType') -ieq 'User') 'ARG returned a non-User assignment for the User-only query.'
+    }
     $roles = @{}
     if ($assignments.Count) {
+        Write-RaStage 'Collecting ARG role definitions and resolving role names'
         foreach ($row in (Get-RaQuery $Group $script:RaRolesQuery 'AtScopeAboveAndBelow' $Attempts)) {
             $key = Get-RaRoleGuid (Get-RaText (Get-RaProperty $row 'id') 'role ID')
             $name = Get-RaText (Get-RaProperty $row 'roleName') 'roleName'
@@ -492,6 +533,7 @@ function Invoke-RaSnapshot {
         }
     }
     $rows = [Collections.Generic.List[object]]::new()
+    Write-RaStage 'Building CSV rows and checking hierarchy and identity'
     foreach ($assignment in $assignments) { $rows.Add((Get-RaAssignmentRow $assignment $hierarchy $roles)) }
     Assert-Ra (Test-RaMapEqual (Get-RaTopology (Get-RaHierarchy $Group $identity.tenantId)) (Get-RaTopology $hierarchy)) 'MG hierarchy changed during collection.'
     Assert-Ra (Test-RaMapEqual (Get-RaIdentity) $identity) 'Azure PowerShell identity changed during collection.'
@@ -499,6 +541,7 @@ function Invoke-RaSnapshot {
         kind = 'snapshot'; tenantId = $identity.tenantId; accountFingerprint = $identity.accountFingerprint
         managementGroupId = $Group.ToLowerInvariant(); startedAt = $started; completedAt = Get-RaStamp
         topology = Get-RaTopology $hierarchy; authorizationScopeFilter = 'AtScopeAndBelow'
+        principalTypeFilter = 'User'
     }
     Write-Output "Snapshot: $Path ($($rows.Count) assignments)"
     [Console]::Error.WriteLine('WARNING: ARG reflects readable, indexed state, not an atomic backup. Keep read permissions fixed and recheck absence with ARM/Activity Log.')
@@ -506,7 +549,14 @@ function Invoke-RaSnapshot {
 
 function Invoke-RaDiff {
     param([string]$BeforePath, [string]$AfterPath, [string]$OutputPath)
+    $BeforePath = Resolve-RaFilePath $BeforePath
+    $AfterPath = Resolve-RaFilePath $AfterPath
+    $OutputPath = Resolve-RaFilePath $OutputPath
     $old = Read-RaCsv $BeforePath; $new = Read-RaCsv $AfterPath
+    Write-RaStage 'Checking snapshot compatibility and comparing assignments'
+    $oldFilter = if ($old.metadata.schemaVersion -eq 3) { $old.metadata.principalTypeFilter } else { 'All' }
+    $newFilter = if ($new.metadata.schemaVersion -eq 3) { $new.metadata.principalTypeFilter } else { 'All' }
+    Assert-Ra ($oldFilter -ceq $newFilter) 'Snapshots are not comparable: principalTypeFilter differs. Capture both snapshots with the same scope.'
     foreach ($field in @('tenantId', 'accountFingerprint', 'managementGroupId', 'topology', 'authorizationScopeFilter')) {
         Assert-Ra ($old.metadata.Contains($field) -and $new.metadata.Contains($field)) "Missing comparison field: $field"
         $equal = if ($field -ceq 'topology') { Test-RaMapEqual $old.metadata[$field] $new.metadata[$field] } else { $old.metadata[$field] -ceq $new.metadata[$field] }
@@ -522,12 +572,14 @@ function Invoke-RaDiff {
     $deleted = [Collections.Generic.List[object]]::new()
     foreach ($key in $keys) { if (-not $new.rows.ContainsKey($key)) { $deleted.Add($old.rows[$key]) } }
     $added = @($new.rows.Keys | Where-Object { -not $old.rows.ContainsKey($_) }).Count
-    Save-RaCsv $OutputPath $deleted.ToArray() @{
-        kind = 'diff'; createdAt = Get-RaStamp; before = [IO.Path]::GetFullPath($BeforePath)
-        after = [IO.Path]::GetFullPath($AfterPath); beforeSha256 = $old.metadata.csvSha256
+    $metadata = @{
+        kind = 'diff'; createdAt = Get-RaStamp; before = $BeforePath
+        after = $AfterPath; beforeSha256 = $old.metadata.csvSha256
         afterSha256 = $new.metadata.csvSha256
         meaning = 'Present before, absent after in ARG; not proof of deletion actor or cause.'
     }
+    if ($oldFilter -ceq 'User') { $metadata.principalTypeFilter = 'User' }
+    Save-RaCsv $OutputPath $deleted.ToArray() $metadata
     Write-Output "Removed from snapshot: $($deleted.Count); added: $added; CSV: $OutputPath"
     [Console]::Error.WriteLine('WARNING: Absence in ARG is a deletion candidate, not proof of a successful delete operation.')
 }
@@ -539,14 +591,22 @@ PowerShell 7+; snapshot requires Az.Accounts and an existing Connect-AzAccount u
 .\verify_role_deletions.ps1 -Mode snapshot -ManagementGroup <mg-id> -Output <new.csv> [-MaxAttempts 3]
 .\verify_role_deletions.ps1 -Mode diff -Before <before.csv> -After <after.csv> -Output <deleted.csv>
 Keep each CSV together with its .metadata.json companion. Existing outputs are never overwritten.
+Run using & or .\file.ps1, not dot-source (. file.ps1). Add -Verbose for per-partition diagnostics.
+Relative paths use Get-Location; the resolved output path is printed when execution starts.
+Snapshots include only direct User assignments (not Group, ServicePrincipal or Managed Identity).
+Collection starts with one partition; only results exceeding 1,000 rows are split.
+Use new snapshots for both before and after. Schema 3 User snapshots cannot be compared with older All snapshots.
 '@
         return
     }
-    $path = Get-RaText $Output 'Output'
+    Write-RaStage 'Validating arguments and output path'
+    $path = Resolve-RaFilePath $Output
     Assert-Ra ([IO.Path]::GetExtension($path) -ieq '.csv') 'Output must end in .csv.'
     Assert-Ra (-not [IO.File]::Exists($path) -and -not [IO.File]::Exists($path + '.metadata.json')) 'Output already exists.'
+    [Console]::Error.WriteLine("INFO: Output: $path")
     if ($Mode -ieq 'snapshot') {
         $group = Get-RaGroup (Get-RaText $ManagementGroup 'ManagementGroup')
+        Write-RaStage 'Loading Az.Accounts'
         if (-not (Get-Module -Name Az.Accounts)) { Import-Module Az.Accounts -ErrorAction Stop }
         Invoke-RaSnapshot $group $path $MaxAttempts
     }
@@ -558,7 +618,10 @@ Keep each CSV together with its .metadata.json companion. Existing outputs are n
 if ($MyInvocation.InvocationName -ne '.') {
     try { Invoke-RaMain }
     catch {
-        [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+        [Console]::Error.WriteLine("ERROR: stage=$script:RaStage; $($_.Exception.Message)")
         exit 1
     }
+}
+elseif ($PSBoundParameters.Count -gt 0) {
+    throw 'Do not dot-source this tool with execution arguments. Run & .\verify_role_deletions.ps1 with the same parameters.'
 }
